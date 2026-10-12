@@ -12,7 +12,9 @@ Design: [specs/design/price-anchor.md](https://github.com/winterchill-trading/sp
 | Module | Purpose |
 | --- | --- |
 | `Anchor` | `create ~exchange ?market_sim ~reference ~sim_symbol ()`, `apply` (one `Market_data.Event.t`), `gap`, `apply_price` (a series point), `step ~now`, `stats` |
-| `Source` | reference items in `recv_ts` order: `of_feed`, `of_feed_with_gaps`, `of_raw`, `of_norm`, `of_series`; `run ?speed ?time_source source ~anchor` |
+| `Source` | reference items in `recv_ts` order: `of_feed`, `of_feed_with_gaps`, `of_raw`, `of_norm`, `of_series`; `run ?speed ?time_source source ~anchor`; `to_path` |
+| `Path` | a reference price as a function of venue time (a series step function or a drifting fixed price), pulled by `Anchor.step` |
+| `Clamp` | `within_bands`: keep a target inside LULD bands or daily limits |
 | `Shadow` | the top-N reference levels as post-only orders of the anchor account, reconciled keep / cancel / place, with consumed size |
 | `Queue_ahead` | reference size ahead of each simulated resting order |
 | `Ref_book` | the reference book from L2 snapshots and deltas (or BBO) |
@@ -91,40 +93,87 @@ clock and its trading phases, so the anchor neither steps the clock nor moves th
 outside continuous trading:
 
 ```ocaml
+let%bind path = Price_anchor.Source.of_series file >>=? Price_anchor.Source.to_path in
 let anchor =
   Price_anchor.Anchor.create
     ~market_sim
     ~noise_traders:(Market_sim.config market_sim).noise_traders
+    ~path:(ok_exn path)                (* pulled on the venue's clock *)
     ~half_life:Time_ns.Span.second   (* pull the walk, do not pin it *)
     ~step_clock:false                (* the venue's clock *)
     ~levels:0                        (* no depth to shadow *)
+    ~mark_interval:Time_ns.Span.zero (* follow on every noise tick *)
     ~may_engage:(fun () ->           (* core session, no auction, no LULD pause or limit halt *)
       Venue.continuous_trading venue ~symbol_id)
     ~last_trade:(fun () -> Venue.last_price venue ~symbol_id)
+    ~clamp:(fun px ->
+      let lower, upper = Venue.bands venue ~symbol_id in
+      Price_anchor.Clamp.within_bands instrument ~lower ~upper px)
     ~price_factor
     ~exchange
-    ~reference:(Market_data.Instrument.of_string "cme:ES")
+    ~reference:(Market_data.Instrument.of_string "nyse:IBM")
     ~sim_symbol
     ()
 in
-(* the series, paced on the venue's time source: *)
-let%bind source = Price_anchor.Source.of_series path >>| ok_exn in
-don't_wait_for (Price_anchor.Source.run ~speed:1. ~time_source source ~anchor);
 (* on each noise tick, after the venue stepped its clock: *)
 Price_anchor.Anchor.step anchor ~now:(Exchange.now exchange)
 ```
 
+- `path` is a `Path.t`: `Path.series`, `Path.fixed ~drift_bps_per_day`,
+  `Path.fixed_of_string "PRICE[,DRIFT]"`, or `Source.to_path` over any source (a series
+  file, recorded event logs, raw minute files). Each `step` takes its price at
+  `now - start` (the exchange's time at `create`). Pushing points with `Source.run`
+  instead (`apply_price`) also works, paced on the venue's `time_source`.
 - `half_life` sets the reference through `Market_sim.set_reference ~half_life`; without it
   the reference is pinned.
 - While `may_engage` says no, the anchor hands the symbol back to the free walk
-  (`clear_reference`, once) and counts waits (`Stats.waits`). When it says yes again the
-  walk restarts from `last_trade` (the opening or reopening auction's price) and climbs
-  back towards the reference (`Stats.resumes`).
+  (`clear_reference`, once; `Stats.pauses`) and counts waits (`Stats.waits`). When it
+  says yes again the walk restarts from `last_trade` (the opening or reopening auction's
+  price) and climbs back towards the reference (`Stats.resumes`).
+- `clamp` moves the scaled target before it is set; `Stats.clamped` counts the updates it
+  moved. `last_set` is the last target set, after the clamp.
 - A series alone never goes stale between its points; pass `max_staleness` to change
   that. Feeds keep the 5 s default.
 - `Source.of_series` returns `Error` for a missing or malformed file.
-- Price bands (LULD, CME daily limits) stay the venue's job: clamp the target before it
-  reaches the anchor if the noise traders must not trade through them.
+- `Anchor.create` calls `Market_sim.set_noise_traders` with `noise_traders` (default 0),
+  so a TradFi simulator passes its own count. It also opens and funds the two anchor
+  accounts, which stay idle with `levels:0` and no trades.
+
+### TradFi migration
+
+How each simulator's own `Anchoring` module maps onto `Anchor` (wave 6). Everything below
+exists here, so the three modules can go; flag parsing (`FILE=SYM`, product lookup) stays
+in each simulator's CLI.
+
+| `Anchoring` (sim) | `Anchor` / this repository |
+| --- | --- |
+| **nyse-sim** `Reference.Series`, `Spec.parse_series`, `-anchor-series` | `Source.of_series` then `Source.to_path` |
+| nyse `Reference.Fixed`, `-anchor-fixed` | `Path.fixed_of_string` |
+| nyse `Spec.points_of_source ?min_interval` (100 ms), `-anchor-scaled` | `Source.of_norm` then `Source.to_path ~min_interval:(Time_ns.Span.of_int_ms 100)`; the factor is `price_factor` |
+| nyse `create ?half_life ~start` (1 s) | `~half_life:Time_ns.Span.second` (the default here pins); `start` is the exchange's time at `create` |
+| nyse `price_at` (Scale, nearest tick) | `reference_price` (same `Scale`, `Nearest`) |
+| nyse `active ~phase ~halted ~auction` | `may_engage` |
+| nyse `on_tick ?bands` (30 bps margin) | `clamp` with `Clamp.within_bands` on `Venue.luld_bands` (`margin` 0.003 by default) |
+| nyse `on_venue_tick` | `step ~now:(Exchange.now exchange)` on each noise tick, `step_clock:false`, `levels:0`, `mark_interval:Time_ns.Span.zero` |
+| nyse `engaged` | `not (is_paused t)` once `last_set` is `Some _` |
+| nyse `Stats` `pulls` / `waits` / `releases` / `clamped` | `marks_set` (changes only, not every tick) / `waits` / `pauses` / `clamped` (applied updates only) |
+| nyse: no restart from the venue's price | omit `last_trade` |
+| **cboe-sim** `Target.series`, `Target.fixed`, `Target.parse_fixed`, `Target.price_at` | `Path.series`, `Path.fixed`, `Path.fixed_of_string`, `Path.price_at` |
+| cboe `Target.load_series ?factor` | `Source.of_series` then `Source.to_path`; `price_factor` |
+| cboe `Target.load_norm ~resolution ~factor` (trades and BBO mids, last price per 1 s bucket) | `Source.of_norm` then `Source.to_path ~min_interval:resolution` (book mids including L2, else trades; first change per interval) |
+| cboe `create ?half_life`, start fixed by the first `update` | `~half_life`; start at `create` |
+| cboe `update ~follow ~sim ~symbol` | `may_engage:(fun () -> anchor_follows ...)` and `step` per tick |
+| cboe `State.Following` / `Waiting`, `last_set` | `is_paused`, `last_set` |
+| cboe `resumes` / `waits` (transitions) | `resumes` (after a pause only: one fewer, the first follow is not a resume) / `pauses` |
+| cboe prices scaled in units, not rounded to the tick | `Scale` rounds to the tick (`Nearest`) |
+| **cme-sim** `Target.Series`, `Target.Fixed`, `Target.price_at` (option) | `Path` (empty series and non-positive prices are rejected when built) |
+| cme `Spec`, `Norm_range`, `load` | CLI: `Source.of_series` / `Path.fixed_of_string` / `Source.of_norm` (scaled: `price_factor`), each then `Source.to_path` |
+| cme `create ?half_life ~start` over a product list | one `Anchor` per product (`Products.engine_symbol`), `~half_life` |
+| cme `step` while `Venue.Phase.Open` | `may_engage:(fun () -> Venue.Phase.equal (Venue.phase venue ~security_id) Open)` |
+| cme restart from `Venue.last_price` on reopening | `last_trade:(fun () -> Some (Venue.last_price venue ~security_id))` |
+| cme `target` (tick-rounded) | `reference_price` (before the clamp) |
+| cme `Stats` `pulls` / `waits` / `restarts` / `last_target` | `marks_set` / `waits` / `resumes` / `last_set` |
+| cme daily limits (not clamped today) | optional: `clamp` with `Clamp.within_bands` on `Venue.price_limits` |
 
 ## Binary
 
