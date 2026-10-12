@@ -9,6 +9,8 @@ module Stats = struct
     ; marks_set : int
     ; funding_rates_set : int
     ; shadow : Shadow.Stats.t
+    ; replays : int
+    ; replays_rejected : int
     }
   [@@deriving sexp_of]
 end
@@ -39,6 +41,8 @@ type t =
   ; mutable ignored : int
   ; mutable marks_set : int
   ; mutable funding_rates_set : int
+  ; mutable replays : int
+  ; mutable replays_rejected : int
   }
 
 let default_funding_interval = Time_ns.Span.of_hr 8.
@@ -109,6 +113,8 @@ let create
     ; ignored = 0
     ; marks_set = 0
     ; funding_rates_set = 0
+    ; replays = 0
+    ; replays_rejected = 0
     }
   in
   Exchange.deposit exchange t.anchor_account balance;
@@ -124,6 +130,8 @@ let stats t =
   ; marks_set = t.marks_set
   ; funding_rates_set = t.funding_rates_set
   ; shadow = Shadow.stats t.shadow
+  ; replays = t.replays
+  ; replays_rejected = t.replays_rejected
   }
 ;;
 
@@ -208,6 +216,76 @@ let update_mark t ~now =
       t.marks_set <- t.marks_set + 1)
 ;;
 
+(* [px] is at or through [p] for a resting order of [passive] side. *)
+let at_or_through ~(passive : Side.t) ~p px =
+  match passive with
+  | Buy -> Price.( >= ) px p
+  | Sell -> Price.( <= ) px p
+;;
+
+(* The size of simulated resting orders a reference trade of [q] at [p] reaches: orders
+   strictly through [p] in full, orders at [p], oldest first, for what is left of [q]
+   after their queue_ahead and the orders at [p] before them. *)
+let eligible_size t ~passive ~p ~q =
+  match Exchange.book t.exchange t.sim_symbol with
+  | None -> Size.zero
+  | Some book ->
+    let orders =
+      Order_book.orders book
+      |> List.filter ~f:(fun (o : Order_book.Resting_order.t) ->
+        Side.equal o.side passive
+        && (not (is_anchor t o.owner))
+        && at_or_through ~passive ~p o.px)
+      |> List.sort ~compare:(fun (a : Order_book.Resting_order.t) b ->
+        Comparable.lexicographic
+          [ (fun (a : Order_book.Resting_order.t) b ->
+              Int.compare a.timestamp b.timestamp)
+          ; (fun a b -> Order_id.compare a.oid b.oid)
+          ]
+          a
+          b)
+    in
+    let used_at_p = ref Size.zero in
+    List.fold orders ~init:Size.zero ~f:(fun acc (o : Order_book.Resting_order.t) ->
+      if not (Price.equal o.px p)
+      then Size.( + ) acc o.remaining
+      else (
+        let ahead =
+          match Queue_ahead.find t.queue o.oid with
+          | Some ahead -> ahead
+          | None -> Shadow.shown t.shadow passive p
+        in
+        let left = Size.( - ) (Size.( - ) q ahead) !used_at_p in
+        let e = Size.min o.remaining (Size.max Size.zero left) in
+        used_at_p := Size.( + ) !used_at_p e;
+        Size.( + ) acc e))
+;;
+
+(* Trade replay: passive simulated orders fill when the reference trades at or through
+   them. Cancel the shadow levels in the way, take the eligible size with an IOC from the
+   taker account, re-place the shadow levels; all in one call, so no simulated client sees
+   the book in between. *)
+let replay_trade t (trade : Market_data.Trade.t) =
+  match Scale.price t.scale trade.price ~direction:Nearest with
+  | None -> ()
+  | Some p ->
+    let q = Scale.size t.scale trade.size in
+    let passive = Side.flip trade.side in
+    refresh_queue t;
+    let eligible = eligible_size t ~passive ~p ~q in
+    if Size.is_positive eligible
+    then (
+      Shadow.cancel_where t.shadow ~side:passive ~f:(at_or_through ~passive ~p);
+      let request =
+        Order_request.limit ~tif:Ioc t.sim_symbol trade.side ~px:p ~size:eligible
+      in
+      (match Exchange.place t.exchange t.taker_account request with
+       | Filled _ -> t.replays <- t.replays + 1
+       | Resting _ | Rejected _ -> t.replays_rejected <- t.replays_rejected + 1);
+      Shadow.reconcile t.shadow t.book);
+    Queue_ahead.trade t.queue ~passive ~px:p ~size:q
+;;
+
 let update_funding t (funding : Market_data.Funding.t) =
   t.funding_mark <- Some funding.mark_price;
   let rate = funding.rate *. t.funding_ratio in
@@ -257,7 +335,9 @@ let apply t (event : Market_data.Event.t) =
        then (
          Ref_book.apply_bbo t.book bbo;
          on_book_update t)
-     | Trade trade -> t.last_trade <- Some trade.price
+     | Trade trade ->
+       t.last_trade <- Some trade.price;
+       replay_trade t trade
      | Funding funding -> update_funding t funding);
     update_mark t ~now)
 ;;

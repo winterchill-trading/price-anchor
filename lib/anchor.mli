@@ -31,7 +31,20 @@
 
     On each reference book update (L2, or BBO for sources without depth) the reference's
     top [levels] per side are kept resting from the anchor account ({!Shadow}), and
-    simulated orders get a queue position behind the reference size ({!Queue_ahead}). *)
+    simulated orders get a queue position behind the reference size ({!Queue_ahead}).
+
+    {2 Trade-replay fills}
+
+    Passive simulated orders fill when the reference trades at or through them, not only
+    when another simulated client takes them. For a reference trade of size [q] at price
+    [p], the simulated resting orders on the passive side at or through [p] are eligible:
+    those strictly through [p] for their full size, those at [p] (oldest first) for what
+    is left of [q] after their [queue_ahead]. The anchor then, within the one call to
+    {!apply}: cancels its own shadow orders at or through [p], places an IOC limit order
+    at [p] for the eligible size from {!taker_account} (a separate account, since
+    self-trade prevention would stop a taker at the anchor's own orders), and re-places
+    the shadow levels. The IOC matches in the book's price-time order, so at [p] it may
+    reach an older order with a long queue before a newer eligible one. *)
 
 open! Core
 open! Exchange_core
@@ -44,6 +57,9 @@ module Stats : sig
     ; marks_set : int
     ; funding_rates_set : int
     ; shadow : Shadow.Stats.t
+    ; replays : int (** trade-replay IOC orders that filled *)
+    ; replays_rejected : int
+    (** trade-replay IOC orders the engine rejected (e.g. below the minimum order value) *)
     }
   [@@deriving sexp_of]
 end
