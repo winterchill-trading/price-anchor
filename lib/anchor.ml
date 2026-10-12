@@ -195,26 +195,34 @@ let refresh_queue t =
 (* Caps queues at prices the shadow levels cover by the reference size there. *)
 let cap_queue t =
   let full = Shadow.full_levels t.book t.scale ~levels:t.levels in
-  let reference side px =
+  let side_cap (side : Side.t) =
     let levels =
       List.filter full ~f:(fun (l : Shadow.Level.t) -> Side.equal l.side side)
     in
     match List.last levels with
-    | None -> None
+    | None -> fun _ -> None
     | Some worst ->
-      let covered =
-        match side with
-        | Buy -> Price.( >= ) px worst.px
-        | Sell -> Price.( <= ) px worst.px
+      let sizes =
+        Price.Map.of_alist_reduce
+          (List.map levels ~f:(fun (l : Shadow.Level.t) -> l.px, l.size))
+          ~f:Size.( + )
       in
-      if not covered
-      then None
-      else
-        Some
-          (List.find levels ~f:(fun l -> Price.equal l.px px)
-           |> Option.value_map ~default:Size.zero ~f:(fun l -> l.size))
+      fun px ->
+        let covered =
+          match side with
+          | Buy -> Price.( >= ) px worst.px
+          | Sell -> Price.( <= ) px worst.px
+        in
+        if covered
+        then Some (Map.find sizes px |> Option.value ~default:Size.zero)
+        else None
   in
-  Queue_ahead.cap t.queue ~reference
+  let bids = side_cap Buy
+  and asks = side_cap Sell in
+  Queue_ahead.cap t.queue ~reference:(fun (side : Side.t) px ->
+    match side with
+    | Buy -> bids px
+    | Sell -> asks px)
 ;;
 
 let on_book_update t =
