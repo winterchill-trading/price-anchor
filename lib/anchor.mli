@@ -111,8 +111,10 @@ type t
     - [levels]: shadow levels per side (default 5).
     - [mark_interval]: minimum simulated time between two [set_mark] calls (default
       100ms).
-    - [max_staleness]: a reference silent for longer is stale (default 5s), measured in
-      simulated time, i.e. on [recv_ts] for recorded sources.
+    - [max_staleness]: a reference silent for longer is stale, measured in simulated time,
+      i.e. on [recv_ts] for recorded sources. Default 5s for feeds; a reference series
+      alone ({!apply_price} with no book) is sparse by nature and never goes silent unless
+      [max_staleness] is given.
     - [funding_interval]: what one reference funding rate covers; defaults to the
       reference's entry in {!Market_data.Instrument_info.catalogue}, else 8 hours.
     - [noise_traders]: with [market_sim], the number of noise traders kept trading

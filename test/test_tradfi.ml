@@ -61,7 +61,7 @@ let%expect_test "a half-life pulls the walk towards the reference" =
     ("after 2s" (walk (100761.7)))
     ("after 3s" (walk (100886.8)))
     ("after 5s" (walk (100978.3)))
-    ("after 10s" (walk (100979.3)))
+    ("after 10s" (walk (100991)))
     |}]
 ;;
 
@@ -154,5 +154,41 @@ let%expect_test "without step_clock the venue keeps its clock" =
     ("venue step" (mark (100100)))
     ((step_clock false) (now_ms 0) (mark (100000)))
     ("venue step" (mark (100100)))
+    |}]
+;;
+
+let%expect_test "a series is not stale between sparse points, a feed is" =
+  let run ?max_staleness label apply =
+    let h =
+      Harness.create (fun ~exchange ~market_sim:_ ->
+        Anchor.create
+          ?max_staleness
+          ~exchange
+          ~reference:Helpers.instrument
+          ~sim_symbol:Harness.btc
+          ())
+    in
+    apply h;
+    let now = Exchange.now h.exchange + Time_ns.Span.to_int_ns (Time_ns.Span.of_min 1.) in
+    Exchange.step h.exchange ~now;
+    Anchor.step h.anchor ~now;
+    print_s
+      [%message
+        label ~stale:((Anchor.stats h.anchor).stale : Anchor.Stale_reason.t option)]
+  in
+  let series (h : Harness.t) =
+    Anchor.apply_price h.anchor ~recv_ts:(Helpers.ms 0) (Price.of_string "100000")
+  in
+  let feed (h : Harness.t) =
+    Anchor.apply h.anchor (Helpers.bbo ~at:0 ~bid:("99990", "1") ~ask:("100010", "1"))
+  in
+  run "series" series;
+  run "series, explicit max_staleness" ~max_staleness:(Time_ns.Span.of_sec 5.) series;
+  run "feed" feed;
+  [%expect
+    {|
+    (series (stale ()))
+    ("series, explicit max_staleness" (stale (Silent)))
+    (feed (stale (Silent)))
     |}]
 ;;

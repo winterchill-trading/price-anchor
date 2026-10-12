@@ -37,7 +37,7 @@ type t =
   ; scale : Scale.t
   ; levels : int
   ; mark_interval_ns : int
-  ; max_staleness_ns : int
+  ; max_staleness_ns : int option (** [None]: the default, which depends on the source *)
   ; noise_traders : int
   ; half_life : Time_ns.Span.t option
   ; may_engage : unit -> bool
@@ -83,7 +83,7 @@ let create
   ?size_factor
   ?(levels = 5)
   ?(mark_interval = Time_ns.Span.of_int_ms 100)
-  ?(max_staleness = Time_ns.Span.of_sec 5.)
+  ?max_staleness
   ?funding_interval
   ?(noise_traders = 0)
   ?half_life
@@ -136,7 +136,7 @@ let create
     ; scale
     ; levels
     ; mark_interval_ns = Time_ns.Span.to_int_ns mark_interval
-    ; max_staleness_ns = Time_ns.Span.to_int_ns max_staleness
+    ; max_staleness_ns = Option.map max_staleness ~f:Time_ns.Span.to_int_ns
     ; noise_traders
     ; half_life
     ; may_engage
@@ -451,9 +451,20 @@ let go_fresh t ~now =
           (now : int)]
 ;;
 
+let default_max_staleness_ns = Time_ns.Span.to_int_ns (Time_ns.Span.of_sec 5.)
+
+(* A series alone is sparse by nature: by default it never goes silent. *)
+let max_staleness_ns t =
+  match t.max_staleness_ns with
+  | Some _ as explicit -> explicit
+  | None ->
+    let series_only = Option.is_some t.series_price && not (t.has_l2 || t.has_bbo) in
+    if series_only then None else Some default_max_staleness_ns
+;;
+
 let check_silence t ~now =
-  match t.stale, t.last_event_at with
-  | None, Some last when now - last > t.max_staleness_ns -> go_stale t ~now Silent
+  match t.stale, t.last_event_at, max_staleness_ns t with
+  | None, Some last, Some max when now - last > max -> go_stale t ~now Silent
   | _ -> ()
 ;;
 
