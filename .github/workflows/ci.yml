@@ -1,0 +1,21 @@
+name: ci
+on: [push, pull_request]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: winterchill-trading/infra/.github/actions/ox-setup@main
+        with:
+          pins: |
+            fixed-decimal https://github.com/winterchill-trading/fixed-decimal.git
+            exchange-core https://github.com/winterchill-trading/exchange-core.git
+            order-book https://github.com/winterchill-trading/order-book.git
+            exchange-core-engine https://github.com/winterchill-trading/exchange-core.git
+            parquet https://github.com/winterchill-trading/parquet.git
+            market-data https://github.com/winterchill-trading/market-data.git
+      - run: opam exec -- dune build
+      - run: opam exec -- dune test
