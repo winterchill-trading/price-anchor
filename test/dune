@@ -1,0 +1,15 @@
+(library
+ (name price_anchor_test)
+ (inline_tests
+  (flags
+   (:standard -source-tree-root .)))
+ (libraries
+  core
+  async
+  exchange-core
+  exchange-core-engine
+  order-book
+  market-data
+  price-anchor)
+ (preprocess
+  (pps ppx_jane)))
