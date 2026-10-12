@@ -13,7 +13,8 @@
     fixed by the first event as the exchange's current time minus its [recv_ts]. Before
     applying an event the anchor steps the exchange to [sim_time] when the exchange clock
     is behind; an event whose [sim_time] is not ahead of the clock is applied at the
-    current time.
+    current time. With [~step_clock:false] the anchor never steps the exchange: the venue
+    owns its clock, and every event is applied at the exchange's current time.
 
     {2 Mark price and funding}
 
@@ -124,6 +125,8 @@ type t
       a limit halt) the venue owns the price: see {!section-pausing}.
     - [last_trade]: the venue's last trade price, where the walk restarts when the anchor
       engages again (default: none, the walk continues from where it is).
+    - [step_clock]: whether the anchor steps the exchange clock to each event's simulated
+      time (default true); false for venues that own their clock.
     - [balance]: deposited into each of the two anchor accounts (default $10B).
     - [log]: receives one line per notable change (default: dropped). *)
 val create
@@ -137,6 +140,7 @@ val create
   -> ?half_life:Time_ns.Span.t
   -> ?may_engage:(unit -> bool)
   -> ?last_trade:(unit -> Price.t option)
+  -> ?step_clock:bool
   -> ?balance:Usd.t
   -> ?log:(Sexp.t -> unit)
   -> ?market_sim:Market_sim.t

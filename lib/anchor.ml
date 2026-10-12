@@ -41,6 +41,7 @@ type t =
   ; noise_traders : int
   ; half_life : Time_ns.Span.t option
   ; may_engage : unit -> bool
+  ; step_clock : bool
   ; venue_last_trade : unit -> Price.t option
   ; funding_ratio : float (** sim interval / reference interval *)
   ; anchor_account : Account.t
@@ -88,6 +89,7 @@ let create
   ?half_life
   ?(may_engage = fun () -> true)
   ?(last_trade = fun () -> None)
+  ?(step_clock = true)
   ?(balance = Usd.of_int 10_000_000_000)
   ?(log = ignore)
   ?market_sim
@@ -138,6 +140,7 @@ let create
     ; noise_traders
     ; half_life
     ; may_engage
+    ; step_clock
     ; venue_last_trade = last_trade
     ; funding_ratio
     ; anchor_account
@@ -471,8 +474,9 @@ let gap t (gap : Market_data.Gap.t) =
     go_stale t ~now:(Exchange.now t.exchange) (Gap gap.reason))
 ;;
 
-(* Moves the exchange clock to the event's simulated time. Returns the event's simulated
-   time ([recv_ts + offset]) and the time it is applied at (not before the clock). *)
+(* Moves the exchange clock to the event's simulated time (unless the venue owns it).
+   Returns the event's simulated time ([recv_ts + offset]) and the time it is applied at
+   (not before the clock). *)
 let advance_clock t recv_ts =
   let recv_ns = Time_ns.to_int_ns_since_epoch recv_ts in
   let now = Exchange.now t.exchange in
@@ -486,7 +490,7 @@ let advance_clock t recv_ts =
       offset
   in
   let sim_time = recv_ns + offset in
-  if sim_time > now
+  if sim_time > now && t.step_clock
   then (
     Exchange.step t.exchange ~now:sim_time;
     sim_time, sim_time)

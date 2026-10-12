@@ -118,3 +118,41 @@ let%expect_test "a phase toggle pauses the anchor and restarts from the last tra
     ("5s later" (walk (100947.1)) (paused false) (waits 20) (resumes 1))
     |}]
 ;;
+
+let%expect_test "without step_clock the venue keeps its clock" =
+  let run ~step_clock =
+    let h =
+      Harness.create (fun ~exchange ~market_sim:_ ->
+        Anchor.create
+          ~step_clock
+          ~exchange
+          ~reference:Helpers.instrument
+          ~sim_symbol:Harness.btc
+          ())
+    in
+    Anchor.apply_price h.anchor ~recv_ts:(Helpers.ms 0) (Price.of_string "100000");
+    Anchor.apply_price h.anchor ~recv_ts:(Helpers.ms 2_500) (Price.of_string "100100");
+    print_s
+      [%message
+        ""
+          (step_clock : bool)
+          ~now_ms:(Exchange.now h.exchange / 1_000_000 : int)
+          ~mark:(Exchange.mark h.exchange Harness.btc : Price.t option)];
+    (* The venue's own clock moves on; the held-back mark follows. *)
+    let now = Exchange.now h.exchange + 200_000_000 in
+    Exchange.step h.exchange ~now;
+    Anchor.step h.anchor ~now;
+    print_s
+      [%message
+        "venue step" ~mark:(Exchange.mark h.exchange Harness.btc : Price.t option)]
+  in
+  run ~step_clock:true;
+  run ~step_clock:false;
+  [%expect
+    {|
+    ((step_clock true) (now_ms 2500) (mark (100100)))
+    ("venue step" (mark (100100)))
+    ((step_clock false) (now_ms 0) (mark (100000)))
+    ("venue step" (mark (100100)))
+    |}]
+;;
