@@ -1,0 +1,14 @@
+(executable
+ (name price_anchor_cli)
+ (public_name price-anchor)
+ (package price-anchor)
+ (libraries
+  core
+  async
+  core_unix.command_unix
+  exchange-core
+  exchange-core-engine
+  market-data
+  price-anchor)
+ (preprocess
+  (pps ppx_jane)))
