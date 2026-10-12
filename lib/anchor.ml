@@ -2,9 +2,21 @@ open! Core
 open! Exchange_core
 open! Exchange_core_engine
 
+module Stale_reason = struct
+  type t =
+    | Waiting_for_book
+    | Silent
+    | Gap of Market_data.Gap.Reason.t
+  [@@deriving sexp_of, compare, equal]
+end
+
 module Stats = struct
   type t =
-    { events : int
+    { stale : Stale_reason.t option
+    ; went_stale : int
+    ; stale_ns : int
+    ; gaps : int
+    ; events : int
     ; ignored : int
     ; marks_set : int
     ; funding_rates_set : int
@@ -23,6 +35,8 @@ type t =
   ; scale : Scale.t
   ; levels : int
   ; mark_interval_ns : int
+  ; max_staleness_ns : int
+  ; noise_traders : int
   ; funding_ratio : float (** sim interval / reference interval *)
   ; anchor_account : Account.t
   ; taker_account : Account.t
@@ -31,6 +45,12 @@ type t =
   ; shadow : Shadow.t
   ; queue : Queue_ahead.t
   ; mutable has_l2 : bool
+  ; mutable stale : Stale_reason.t option
+  ; mutable stale_since : int
+  ; mutable stale_ns : int
+  ; mutable went_stale : int
+  ; mutable gaps : int
+  ; mutable last_event_at : int option
   ; mutable offset : int option
   ; mutable funding_mark : Price.t option
   ; mutable last_trade : Price.t option
@@ -52,6 +72,7 @@ let create
   ?size_factor
   ?(levels = 5)
   ?(mark_interval = Time_ns.Span.of_int_ms 100)
+  ?(max_staleness = Time_ns.Span.of_sec 5.)
   ?funding_interval
   ?(noise_traders = 0)
   ?(balance = Usd.of_int 10_000_000_000)
@@ -94,6 +115,8 @@ let create
     ; scale
     ; levels
     ; mark_interval_ns = Time_ns.Span.to_int_ns mark_interval
+    ; max_staleness_ns = Time_ns.Span.to_int_ns max_staleness
+    ; noise_traders
     ; funding_ratio
     ; anchor_account
     ; taker_account = name "anchor-taker"
@@ -103,6 +126,12 @@ let create
         Shadow.create exchange ~account:anchor_account ~symbol:sim_symbol ~scale ~levels
     ; queue = Queue_ahead.create ()
     ; has_l2 = false
+    ; stale = Some Waiting_for_book
+    ; stale_since = Exchange.now exchange
+    ; stale_ns = 0
+    ; went_stale = 1
+    ; gaps = 0
+    ; last_event_at = None
     ; offset = None
     ; funding_mark = None
     ; last_trade = None
@@ -125,7 +154,14 @@ let create
 ;;
 
 let stats t =
-  { Stats.events = t.events
+  { Stats.stale = t.stale
+  ; went_stale = t.went_stale
+  ; stale_ns =
+      (match t.stale with
+       | None -> t.stale_ns
+       | Some _ -> t.stale_ns + (Exchange.now t.exchange - t.stale_since))
+  ; gaps = t.gaps
+  ; events = t.events
   ; ignored = t.ignored
   ; marks_set = t.marks_set
   ; funding_rates_set = t.funding_rates_set
@@ -136,6 +172,7 @@ let stats t =
 ;;
 
 let offset t = t.offset
+let is_stale t = Option.is_some t.stale
 let anchor_account t = t.anchor_account
 let taker_account t = t.taker_account
 let sim_symbol t = t.sim_symbol
@@ -296,8 +333,71 @@ let update_funding t (funding : Market_data.Funding.t) =
     t.funding_rates_set <- t.funding_rates_set + 1)
 ;;
 
-(* Moves the exchange clock to the event's simulated time and returns the time the event
-   is applied at. *)
+(* Stale: no shadow levels, no trade replay, no set_mark; the noise traders' walk takes
+   over from the last price if the instrument has any. *)
+let go_stale t ~now reason =
+  match t.stale with
+  | Some _ -> ()
+  | None ->
+    t.stale <- Some reason;
+    t.stale_since <- now;
+    t.went_stale <- t.went_stale + 1;
+    Shadow.cancel_all t.shadow;
+    (match t.market_sim with
+     | Some sim when t.noise_traders > 0 -> Market_sim.clear_reference sim t.sim_symbol
+     | Some _ | None -> ());
+    t.log
+      [%message
+        "anchor: reference stale"
+          ~reference:(Market_data.Instrument.to_string t.reference)
+          (reason : Stale_reason.t)
+          (now : int)]
+;;
+
+let go_fresh t ~now =
+  match t.stale with
+  | None -> ()
+  | Some reason ->
+    let stale_for_ns = now - t.stale_since in
+    t.stale_ns <- t.stale_ns + stale_for_ns;
+    t.stale <- None;
+    (* Pin the reference again at once, even at an unchanged price. *)
+    t.mark_set <- None;
+    t.mark_set_at <- None;
+    t.log
+      [%message
+        "anchor: reference fresh"
+          ~reference:(Market_data.Instrument.to_string t.reference)
+          ~was:(reason : Stale_reason.t)
+          (stale_for_ns : int)
+          (now : int)]
+;;
+
+let check_silence t ~now =
+  match t.stale, t.last_event_at with
+  | None, Some last when now - last > t.max_staleness_ns -> go_stale t ~now Silent
+  | _ -> ()
+;;
+
+let relevant_gap t (gap : Market_data.Gap.t) =
+  Market_data.Venue.equal gap.venue t.reference.venue
+  && Option.for_all gap.instrument ~f:(Market_data.Instrument.equal t.reference)
+  && Option.for_all gap.stream ~f:(fun (s : Market_data.Stream.t) ->
+    match s with
+    | Trades | Bbo | L2 | Funding -> true
+    | Private -> false)
+;;
+
+let gap t (gap : Market_data.Gap.t) =
+  if relevant_gap t gap
+  then (
+    t.gaps <- t.gaps + 1;
+    Ref_book.clear t.book;
+    go_stale t ~now:(Exchange.now t.exchange) (Gap gap.reason))
+;;
+
+(* Moves the exchange clock to the event's simulated time. Returns the event's simulated
+   time ([recv_ts + offset]) and the time it is applied at (not before the clock). *)
 let advance_clock t (event : Market_data.Event.t) =
   let recv_ns = Time_ns.to_int_ns_since_epoch (Market_data.Event.recv_ts event) in
   let now = Exchange.now t.exchange in
@@ -314,8 +414,8 @@ let advance_clock t (event : Market_data.Event.t) =
   if sim_time > now
   then (
     Exchange.step t.exchange ~now:sim_time;
-    sim_time)
-  else now
+    sim_time, sim_time)
+  else sim_time, now
 ;;
 
 let apply t (event : Market_data.Event.t) =
@@ -323,26 +423,35 @@ let apply t (event : Market_data.Event.t) =
   then t.ignored <- t.ignored + 1
   else (
     t.events <- t.events + 1;
-    let now = advance_clock t event in
+    let event_time, now = advance_clock t event in
+    check_silence t ~now:event_time;
+    t.last_event_at <- Some event_time;
     (match event with
      | L2 update ->
        t.has_l2 <- true;
        Ref_book.apply_l2 t.book update;
-       on_book_update t
+       (match update.kind with
+        | Snapshot -> go_fresh t ~now
+        | Delta -> ());
+       if not (is_stale t) then on_book_update t
      | Bbo bbo ->
        (* With depth available, the L2 book is the better source. *)
        if not t.has_l2
        then (
          Ref_book.apply_bbo t.book bbo;
+         go_fresh t ~now;
          on_book_update t)
      | Trade trade ->
        t.last_trade <- Some trade.price;
-       replay_trade t trade
+       if not (is_stale t) then replay_trade t trade
      | Funding funding -> update_funding t funding);
-    update_mark t ~now)
+    if not (is_stale t) then update_mark t ~now)
 ;;
 
 let step t ~now =
-  refresh_queue t;
-  update_mark t ~now
+  check_silence t ~now;
+  if not (is_stale t)
+  then (
+    refresh_queue t;
+    update_mark t ~now)
 ;;

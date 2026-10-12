@@ -44,15 +44,37 @@
     at [p] for the eligible size from {!taker_account} (a separate account, since
     self-trade prevention would stop a taker at the anchor's own orders), and re-places
     the shadow levels. The IOC matches in the book's price-time order, so at [p] it may
-    reach an older order with a long queue before a newer eligible one. *)
+    reach an older order with a long queue before a newer eligible one.
+
+    {2 Staleness}
+
+    The reference is stale before the first L2 snapshot (or BBO, for sources without
+    depth), after a gap ({!gap}) and after [max_staleness] without an event. While stale
+    the anchor cancels its shadow levels, stops trade replay and stops setting the mark
+    (it stays at the last reference price); with a [market_sim] and [noise_traders > 0]
+    the symbol goes back to the noise traders' random walk from the last price. The next
+    L2 snapshot (or BBO, without depth) makes it fresh: the reference is pinned and the
+    shadow levels placed at once. Each transition is passed to [log] and counted. *)
 
 open! Core
 open! Exchange_core
 open! Exchange_core_engine
 
+module Stale_reason : sig
+  type t =
+    | Waiting_for_book (** no L2 snapshot (or BBO, for sources without depth) yet *)
+    | Silent (** no reference event for [max_staleness] *)
+    | Gap of Market_data.Gap.Reason.t (** the source reported a break *)
+  [@@deriving sexp_of, compare, equal]
+end
+
 module Stats : sig
   type t =
-    { events : int (** reference events applied *)
+    { stale : Stale_reason.t option (** [None] while fresh *)
+    ; went_stale : int (** transitions to stale, counting the initial wait *)
+    ; stale_ns : int (** simulated time spent stale so far *)
+    ; gaps : int
+    ; events : int (** reference events applied *)
     ; ignored : int (** events of another instrument *)
     ; marks_set : int
     ; funding_rates_set : int
@@ -73,6 +95,8 @@ type t
     - [levels]: shadow levels per side (default 5).
     - [mark_interval]: minimum simulated time between two [set_mark] calls (default
       100ms).
+    - [max_staleness]: a reference silent for longer is stale (default 5s), measured in
+      simulated time, i.e. on [recv_ts] for recorded sources.
     - [funding_interval]: what one reference funding rate covers; defaults to the
       reference's entry in {!Market_data.Instrument_info.catalogue}, else 8 hours.
     - [noise_traders]: with [market_sim], the number of noise traders kept trading
@@ -84,6 +108,7 @@ val create
   -> ?size_factor:float
   -> ?levels:int
   -> ?mark_interval:Time_ns.Span.t
+  -> ?max_staleness:Time_ns.Span.t
   -> ?funding_interval:Time_ns.Span.t
   -> ?noise_traders:int
   -> ?balance:Usd.t
@@ -98,12 +123,19 @@ val create
 (** Applies one reference event. Events of other instruments are counted and ignored. *)
 val apply : t -> Market_data.Event.t -> unit
 
+(** A break reported by the source ({!Market_data.Feed.With_gaps}, an empty raw line):
+    when it concerns the reference, the reference book is dropped and the anchor goes
+    stale. *)
+val gap : t -> Market_data.Gap.t -> unit
+
 (** Called by the simulator's clock after it steps the exchange to [now] (nanoseconds):
+    marks the reference stale when it has been silent for [max_staleness]; otherwise
     starts tracking the queue of newly placed simulated orders and applies a mark change
     held back by [mark_interval]. *)
 val step : t -> now:int -> unit
 
 val stats : t -> Stats.t
+val is_stale : t -> bool
 
 (** [Some offset] once the first event fixed it: [sim_time = recv_ts + offset], in
     nanoseconds. *)

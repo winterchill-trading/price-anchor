@@ -27,14 +27,16 @@ let%expect_test "mark precedence: funding mark, then mid, then last trade" =
     Anchor.apply h.anchor e;
     show_mark h label
   in
-  apply "trade" (Helpers.trade ~at:0 Buy ~px:"100000.04" ~sz:"0.1");
+  (* A one-sided book makes the reference fresh but has no mid. *)
+  apply "one-sided bbo" (Helpers.bbo ~at:0 ~bid:("100010", "1") ~ask:("100020", "0"));
+  apply "trade" (Helpers.trade ~at:10 Buy ~px:"100000.04" ~sz:"0.1");
   apply
     "bbo within interval"
     (Helpers.bbo ~at:50 ~bid:("100010", "1") ~ask:("100020", "1"));
   Anchor.step h.anchor ~now:(Exchange.now h.exchange);
   show_mark h "step too early";
-  Exchange.step h.exchange ~now:100_000_000;
-  Anchor.step h.anchor ~now:100_000_000;
+  Exchange.step h.exchange ~now:110_000_000;
+  Anchor.step h.anchor ~now:110_000_000;
   show_mark h "step after interval";
   apply "trade under a book" (Helpers.trade ~at:300 Sell ~px:"99000" ~sz:"0.1");
   apply "funding mark" (Helpers.funding ~at:400 ~rate:0.0001 ~mark:"100100.06");
@@ -42,14 +44,16 @@ let%expect_test "mark precedence: funding mark, then mid, then last trade" =
   print_s [%sexp (Anchor.stats h.anchor : Anchor.Stats.t)];
   [%expect
     {|
-    (trade (now_ms 0) (mark (100000)))
+    ("one-sided bbo" (now_ms 0) (mark ()))
+    (trade (now_ms 10) (mark (100000)))
     ("bbo within interval" (now_ms 50) (mark (100000)))
     ("step too early" (now_ms 50) (mark (100000)))
-    ("step after interval" (now_ms 100) (mark (100015)))
+    ("step after interval" (now_ms 110) (mark (100015)))
     ("trade under a book" (now_ms 300) (mark (100015)))
     ("funding mark" (now_ms 400) (mark (100100.1)))
     ("book moves" (now_ms 500) (mark (100100.1)))
-    ((events 5) (ignored 0) (marks_set 3) (funding_rates_set 1)
+    ((stale ()) (went_stale 1) (stale_ns 0) (gaps 0) (events 6) (ignored 0)
+     (marks_set 3) (funding_rates_set 1)
      (shadow ((placed 4) (cancelled 2) (skipped 0) (consumed 0))) (replays 0)
      (replays_rejected 0))
     |}]
@@ -90,7 +94,8 @@ let%expect_test "events of another instrument are ignored" =
   print_s [%sexp (Anchor.stats h.anchor : Anchor.Stats.t)];
   [%expect
     {|
-    ((events 0) (ignored 1) (marks_set 0) (funding_rates_set 0)
+    ((stale (Waiting_for_book)) (went_stale 1) (stale_ns 0) (gaps 0) (events 0)
+     (ignored 1) (marks_set 0) (funding_rates_set 0)
      (shadow ((placed 0) (cancelled 0) (skipped 0) (consumed 0))) (replays 0)
      (replays_rejected 0))
     |}]
@@ -134,7 +139,8 @@ let%expect_test "an anchored run with noise traders replays bit for bit from its
     {|
     ((mark (100073)) (reference (100073))
      (stats
-      ((events 123) (ignored 0) (marks_set 3) (funding_rates_set 3)
+      ((stale ()) (went_stale 1) (stale_ns 0) (gaps 0) (events 123) (ignored 0)
+       (marks_set 3) (funding_rates_set 3)
        (shadow ((placed 118) (cancelled 116) (skipped 5) (consumed 2)))
        (replays 4) (replays_rejected 0))))
     (replay (inputs 641) (events 388) (same_events true) (same_mark true))
