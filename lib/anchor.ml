@@ -37,6 +37,7 @@ type t =
   ; mark_interval_ns : int
   ; max_staleness_ns : int
   ; noise_traders : int
+  ; half_life : Time_ns.Span.t option
   ; funding_ratio : float (** sim interval / reference interval *)
   ; anchor_account : Account.t
   ; taker_account : Account.t
@@ -77,6 +78,7 @@ let create
   ?(max_staleness = Time_ns.Span.of_sec 5.)
   ?funding_interval
   ?(noise_traders = 0)
+  ?half_life
   ?(balance = Usd.of_int 10_000_000_000)
   ?(log = ignore)
   ?market_sim
@@ -90,6 +92,12 @@ let create
     | Some i -> i
     | None -> raise_s [%message "Anchor.create: unknown symbol" (sim_symbol : Symbol.t)]
   in
+  Option.iter half_life ~f:(fun half_life ->
+    if Time_ns.Span.( <= ) half_life Time_ns.Span.zero
+    then
+      raise_s
+        [%message
+          "Anchor.create: half_life must be positive" (half_life : Time_ns.Span.t)]);
   let funding_interval =
     match funding_interval with
     | Some i -> i
@@ -119,6 +127,7 @@ let create
     ; mark_interval_ns = Time_ns.Span.to_int_ns mark_interval
     ; max_staleness_ns = Time_ns.Span.to_int_ns max_staleness
     ; noise_traders
+    ; half_life
     ; funding_ratio
     ; anchor_account
     ; taker_account = name "anchor-taker"
@@ -258,7 +267,7 @@ let update_mark t ~now =
     if changed && due
     then (
       (match t.market_sim with
-       | Some sim -> Market_sim.set_reference sim t.sim_symbol px
+       | Some sim -> Market_sim.set_reference ?half_life:t.half_life sim t.sim_symbol px
        | None -> Exchange.set_mark t.exchange t.sim_symbol px);
       t.mark_set <- Some px;
       t.mark_set_at <- Some now;

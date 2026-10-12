@@ -25,8 +25,10 @@
     simulated time; a change held back by the interval is applied by a later {!apply} or
     {!step}. With a [market_sim], the reference is pinned through
     [Market_sim.set_reference] (which also sets the mark), so noise traders quote around
-    it. Funding rates are converted to the exchange's funding interval:
-    [rate * sim_interval / reference_interval].
+    it; with a [half_life] as well, the noise traders' walk is pulled towards it instead
+    (mean reversion, the mark following on the next tick), the way the TradFi simulators
+    use a reference with no depth. Funding rates are converted to the exchange's funding
+    interval: [rate * sim_interval / reference_interval].
 
     {2 Shadow levels}
 
@@ -102,6 +104,9 @@ type t
       reference's entry in {!Market_data.Instrument_info.catalogue}, else 8 hours.
     - [noise_traders]: with [market_sim], the number of noise traders kept trading
       [sim_symbol] (default 0: the reference provides the liquidity).
+    - [half_life]: with [market_sim], pull the walk towards the reference with this
+      half-life ([Market_sim.set_reference ~half_life]) instead of pinning it (default:
+      pin). Raises if not positive.
     - [balance]: deposited into each of the two anchor accounts (default $10B).
     - [log]: receives one line per notable change (default: dropped). *)
 val create
@@ -112,6 +117,7 @@ val create
   -> ?max_staleness:Time_ns.Span.t
   -> ?funding_interval:Time_ns.Span.t
   -> ?noise_traders:int
+  -> ?half_life:Time_ns.Span.t
   -> ?balance:Usd.t
   -> ?log:(Sexp.t -> unit)
   -> ?market_sim:Market_sim.t
