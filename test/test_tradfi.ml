@@ -192,3 +192,40 @@ let%expect_test "a series is not stale between sparse points, a feed is" =
     (feed (stale (Silent)))
     |}]
 ;;
+
+let%expect_test "a clamp keeps the target inside the venue's bands" =
+  let upper = ref (Price.of_string "100500") in
+  let h =
+    Harness.create (fun ~exchange ~market_sim:_ ->
+      Anchor.create
+        ~clamp:(fun px -> Price.min px !upper)
+        ~exchange
+        ~reference:Helpers.instrument
+        ~sim_symbol:Harness.btc
+        ())
+  in
+  let point ~ms px =
+    Anchor.apply_price h.anchor ~recv_ts:(Helpers.ms ms) (Price.of_string px);
+    let now = Exchange.now h.exchange + tick_ns in
+    Exchange.step h.exchange ~now;
+    Anchor.step h.anchor ~now;
+    print_s
+      [%message
+        px
+          ~mark:(Exchange.mark h.exchange Harness.btc : Price.t option)
+          ~clamped:((Anchor.stats h.anchor).clamped : int)]
+  in
+  point ~ms:0 "100000";
+  point ~ms:1_000 "101000";
+  (* The venue's band moves up with its own trades; the clamp reads it each time. *)
+  upper := Price.of_string "100800";
+  point ~ms:2_000 "101000";
+  point ~ms:3_000 "100200";
+  [%expect
+    {|
+    (100000 (mark (100000)) (clamped 0))
+    (101000 (mark (100500)) (clamped 1))
+    (101000 (mark (100800)) (clamped 2))
+    (100200 (mark (100200)) (clamped 2))
+    |}]
+;;
