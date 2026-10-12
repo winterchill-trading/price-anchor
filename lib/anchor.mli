@@ -57,7 +57,17 @@
     (it stays at the last reference price); with a [market_sim] and [noise_traders > 0]
     the symbol goes back to the noise traders' random walk from the last price. The next
     L2 snapshot (or BBO, without depth) makes it fresh: the reference is pinned and the
-    shadow levels placed at once. Each transition is passed to [log] and counted. *)
+    shadow levels placed at once. Each transition is passed to [log] and counted.
+
+    {2:pausing Pausing}
+
+    A venue with its own trading phases passes [may_engage]. When it first says no, the
+    anchor hands the symbol to the noise traders' free walk ([Market_sim.clear_reference],
+    once) and then counts each held-back update as a wait. When it says yes again, the
+    walk restarts from the venue's last trade ([last_trade], pinned through
+    [Market_sim.set_reference]) and the reference is set again at once, so with a
+    [half_life] the price climbs back from where the venue left it. Pausing leaves the
+    shadow levels and trade replay alone; the venues that pause have no depth to shadow. *)
 
 open! Core
 open! Exchange_core
@@ -85,6 +95,8 @@ module Stats : sig
     ; replays : int (** trade-replay IOC orders that filled *)
     ; replays_rejected : int
     (** trade-replay IOC orders the engine rejected (e.g. below the minimum order value) *)
+    ; waits : int (** mark updates held back because [may_engage] said no *)
+    ; resumes : int (** times [may_engage] allowed the anchor again after a wait *)
     }
   [@@deriving sexp_of]
 end
@@ -107,6 +119,11 @@ type t
     - [half_life]: with [market_sim], pull the walk towards the reference with this
       half-life ([Market_sim.set_reference ~half_life]) instead of pinning it (default:
       pin). Raises if not positive.
+    - [may_engage]: asked before each mark or reference update (default: always). While it
+      says no (a session phase without continuous trading, an auction, a volatility pause,
+      a limit halt) the venue owns the price: see {!section-pausing}.
+    - [last_trade]: the venue's last trade price, where the walk restarts when the anchor
+      engages again (default: none, the walk continues from where it is).
     - [balance]: deposited into each of the two anchor accounts (default $10B).
     - [log]: receives one line per notable change (default: dropped). *)
 val create
@@ -118,6 +135,8 @@ val create
   -> ?funding_interval:Time_ns.Span.t
   -> ?noise_traders:int
   -> ?half_life:Time_ns.Span.t
+  -> ?may_engage:(unit -> bool)
+  -> ?last_trade:(unit -> Price.t option)
   -> ?balance:Usd.t
   -> ?log:(Sexp.t -> unit)
   -> ?market_sim:Market_sim.t
@@ -149,6 +168,9 @@ val step : t -> now:int -> unit
 
 val stats : t -> Stats.t
 val is_stale : t -> bool
+
+(** Whether [may_engage] said no at the last update and has not said yes since. *)
+val is_paused : t -> bool
 
 (** [Some offset] once the first event fixed it: [sim_time = recv_ts + offset], in
     nanoseconds. *)

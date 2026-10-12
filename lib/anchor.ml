@@ -23,6 +23,8 @@ module Stats = struct
     ; shadow : Shadow.Stats.t
     ; replays : int
     ; replays_rejected : int
+    ; waits : int
+    ; resumes : int
     }
   [@@deriving sexp_of]
 end
@@ -38,6 +40,8 @@ type t =
   ; max_staleness_ns : int
   ; noise_traders : int
   ; half_life : Time_ns.Span.t option
+  ; may_engage : unit -> bool
+  ; venue_last_trade : unit -> Price.t option
   ; funding_ratio : float (** sim interval / reference interval *)
   ; anchor_account : Account.t
   ; taker_account : Account.t
@@ -66,6 +70,9 @@ type t =
   ; mutable funding_rates_set : int
   ; mutable replays : int
   ; mutable replays_rejected : int
+  ; mutable paused : bool
+  ; mutable waits : int
+  ; mutable resumes : int
   }
 
 let default_funding_interval = Time_ns.Span.of_hr 8.
@@ -79,6 +86,8 @@ let create
   ?funding_interval
   ?(noise_traders = 0)
   ?half_life
+  ?(may_engage = fun () -> true)
+  ?(last_trade = fun () -> None)
   ?(balance = Usd.of_int 10_000_000_000)
   ?(log = ignore)
   ?market_sim
@@ -128,6 +137,8 @@ let create
     ; max_staleness_ns = Time_ns.Span.to_int_ns max_staleness
     ; noise_traders
     ; half_life
+    ; may_engage
+    ; venue_last_trade = last_trade
     ; funding_ratio
     ; anchor_account
     ; taker_account = name "anchor-taker"
@@ -157,6 +168,9 @@ let create
     ; funding_rates_set = 0
     ; replays = 0
     ; replays_rejected = 0
+    ; paused = false
+    ; waits = 0
+    ; resumes = 0
     }
   in
   Exchange.deposit exchange t.anchor_account balance;
@@ -181,10 +195,13 @@ let stats t =
   ; shadow = Shadow.stats t.shadow
   ; replays = t.replays
   ; replays_rejected = t.replays_rejected
+  ; waits = t.waits
+  ; resumes = t.resumes
   }
 ;;
 
 let offset t = t.offset
+let is_paused t = t.paused
 let is_stale t = Option.is_some t.stale
 let anchor_account t = t.anchor_account
 let taker_account t = t.taker_account
@@ -254,7 +271,7 @@ let reference_price t =
     Scale.price t.scale px ~direction:Nearest)
 ;;
 
-let update_mark t ~now =
+let set_mark t ~now =
   match reference_price t with
   | None -> ()
   | Some px ->
@@ -273,6 +290,43 @@ let update_mark t ~now =
       t.mark_set_at <- Some now;
       t.marks_set <- t.marks_set + 1)
 ;;
+
+(* Whether the venue lets the anchor move the price now. The first refusal hands the
+   symbol back to the walk; the next permission restarts the walk from the venue's last
+   trade and sets the reference again at once. *)
+let may_engage t =
+  if t.may_engage ()
+  then (
+    if t.paused
+    then (
+      t.paused <- false;
+      t.resumes <- t.resumes + 1;
+      let restart_from = t.venue_last_trade () in
+      (match t.market_sim, restart_from with
+       | Some sim, Some px when Price.( > ) px Price.zero ->
+         Market_sim.set_reference sim t.sim_symbol px
+       | _ -> ());
+      t.mark_set <- None;
+      t.mark_set_at <- None;
+      t.log
+        [%message
+          "anchor: engaged"
+            ~reference:(Market_data.Instrument.to_string t.reference)
+            (restart_from : Price.t option)]);
+    true)
+  else (
+    t.waits <- t.waits + 1;
+    if not t.paused
+    then (
+      t.paused <- true;
+      Option.iter t.market_sim ~f:(fun sim -> Market_sim.clear_reference sim t.sim_symbol);
+      t.log
+        [%message
+          "anchor: paused" ~reference:(Market_data.Instrument.to_string t.reference)]);
+    false)
+;;
+
+let update_mark t ~now = if may_engage t then set_mark t ~now
 
 (* [px] is at or through [p] for a resting order of [passive] side. *)
 let at_or_through ~(passive : Side.t) ~p px =
