@@ -94,6 +94,39 @@ let%expect_test "a series file drives the mark" =
       |}])
 ;;
 
+let%expect_test "a missing or malformed series file is an error, not an exception" =
+  with_dir "series-errors" (fun dir ->
+    let show ?(details = true) path =
+      let%map result = Source.of_series path in
+      let error =
+        Result.error result
+        |> Option.map ~f:(fun e ->
+          if details
+          then Error.sexp_of_t e
+          else (
+            (* Keep the tag only: the OS error text differs between systems. *)
+            match Error.sexp_of_t e with
+            | Sexp.List (tag :: _) -> tag
+            | sexp -> sexp))
+      in
+      print_s [%message "" ~ok:(Result.is_ok result : bool) (error : Sexp.t option)]
+    in
+    let%bind () = show ~details:false (dir ^/ "missing.txt") in
+    let bad = dir ^/ "bad.txt" in
+    let%bind () =
+      Writer.save bad ~contents:"2025-10-09T08:53:20Z 100000\nnot a point\n"
+    in
+    let%map () = show bad in
+    [%expect
+      {|
+      ((ok false) (error (("series file" (path series-errors/missing.txt)))))
+      ((ok false)
+       (error
+        ((("series file" (path series-errors/bad.txt))
+          (("series line" (line "not a point")) "expected <time> <price>")))))
+      |}])
+;;
+
 let%expect_test "speed paces recorded time on the time source" =
   let time_source = Time_source.create ~now:Helpers.epoch () in
   let h = new_anchor () in

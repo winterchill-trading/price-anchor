@@ -119,16 +119,20 @@ let parse_series_line line =
 ;;
 
 let of_series path =
-  let%map lines = Reader.file_lines path in
-  List.filter lines ~f:(fun line ->
-    let line = String.strip line in
-    not (String.is_empty line || String.is_prefix line ~prefix:"#"))
-  |> List.map ~f:parse_series_line
-  |> Or_error.combine_errors
-  |> Or_error.tag_s ~tag:[%message "series file" (path : string)]
-  |> Or_error.map ~f:(fun points ->
-    Pipe.of_list
-      (List.map points ~f:(fun (recv_ts, price) -> Item.Price { recv_ts; price })))
+  let%map lines =
+    Monitor.try_with_or_error ~extract_exn:true (fun () -> Reader.file_lines path)
+  in
+  Or_error.tag_s ~tag:[%message "series file" (path : string)] lines
+  |> Or_error.bind ~f:(fun lines ->
+    List.filter lines ~f:(fun line ->
+      let line = String.strip line in
+      not (String.is_empty line || String.is_prefix line ~prefix:"#"))
+    |> List.map ~f:parse_series_line
+    |> Or_error.combine_errors
+    |> Or_error.tag_s ~tag:[%message "series file" (path : string)]
+    |> Or_error.map ~f:(fun points ->
+      Pipe.of_list
+        (List.map points ~f:(fun (recv_ts, price) -> Item.Price { recv_ts; price }))))
 ;;
 
 let apply anchor : Item.t -> unit = function
