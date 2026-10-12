@@ -28,10 +28,15 @@ let run ?(extra_ticks = 0) ?(after_tick = ignore) t events =
   match events with
   | [] -> ()
   | first :: _ ->
-    let start = recv first - Exchange.now t.exchange in
+    (* Events land at the anchor's simulated time once its offset is fixed. *)
+    let start =
+      match Price_anchor.Anchor.offset t.anchor with
+      | Some offset -> -offset
+      | None -> recv first - Exchange.now t.exchange
+    in
     let last = recv (List.last_exn events) - start in
     let pending = ref events in
-    let ticks = (last / tick_ns) + 1 + extra_ticks in
+    let ticks = ((last - Exchange.now t.exchange) / tick_ns) + 1 + extra_ticks in
     for k = 1 to ticks do
       let now = Exchange.now t.exchange + tick_ns in
       let rec feed () =
