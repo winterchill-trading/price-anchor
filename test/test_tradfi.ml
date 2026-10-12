@@ -229,3 +229,74 @@ let%expect_test "a clamp keeps the target inside the venue's bands" =
     (100200 (mark (100200)) (clamped 2))
     |}]
 ;;
+
+let%expect_test "a path is pulled on the venue's clock, as the TradFi simulators do" =
+  let open_ = ref true in
+  let path =
+    Path.series
+      [ Helpers.ms 0, Price.of_string "100000"
+      ; Helpers.ms 2_000, Price.of_string "101000"
+      ]
+    |> ok_exn
+  in
+  let h =
+    Harness.create ~sim_config (fun ~exchange ~market_sim ->
+      Anchor.create
+        ~path
+        ~half_life:Time_ns.Span.second
+        ~step_clock:false
+        ~levels:0
+        ~mark_interval:Time_ns.Span.zero
+        ~may_engage:(fun () -> !open_)
+        ~clamp:(fun px -> Price.min px (Price.of_string "100800"))
+        ?market_sim
+        ~noise_traders:3
+        ~exchange
+        ~reference:Helpers.instrument
+        ~sim_symbol:Harness.btc
+        ())
+  in
+  let show label =
+    let s = Anchor.stats h.anchor in
+    print_s
+      [%message
+        label
+          ~last_set:(Anchor.last_set h.anchor : Price.t option)
+          ~walk:(walk h : Price.t option)
+          ~stale:(Anchor.is_stale h.anchor : bool)
+          ~marks_set:(s.marks_set : int)
+          ~clamped:(s.clamped : int)
+          ~waits:(s.waits : int)
+          ~pauses:(s.pauses : int)
+          ~resumes:(s.resumes : int)]
+  in
+  let ticks n =
+    for _ = 1 to n do
+      tick h
+    done
+  in
+  show "created";
+  ticks 1;
+  show "first tick";
+  ticks 19;
+  show "2s: the series stepped up, clamped";
+  open_ := false;
+  ticks 5;
+  show "halted";
+  open_ := true;
+  ticks 1;
+  show "reopened";
+  [%expect
+    {|
+    (created (last_set ()) (walk (100000)) (stale true) (marks_set 0) (clamped 0)
+     (waits 0) (pauses 0) (resumes 0))
+    ("first tick" (last_set (100000)) (walk (99996.7)) (stale false)
+     (marks_set 1) (clamped 0) (waits 0) (pauses 0) (resumes 0))
+    ("2s: the series stepped up, clamped" (last_set (100800)) (walk (99989.7))
+     (stale false) (marks_set 2) (clamped 1) (waits 0) (pauses 0) (resumes 0))
+    (halted (last_set (100800)) (walk (100031.4)) (stale false) (marks_set 2)
+     (clamped 1) (waits 5) (pauses 1) (resumes 0))
+    (reopened (last_set (100800)) (walk (100028.7)) (stale false) (marks_set 3)
+     (clamped 2) (waits 5) (pauses 1) (resumes 1))
+    |}]
+;;
