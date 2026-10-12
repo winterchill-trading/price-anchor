@@ -65,7 +65,8 @@ val parse_series_line : string -> (Time_ns.t * Market_data.Price.t) Or_error.t
 
 (** A series file: one {!parse_series_line} point per line, in time order; blank lines and
     lines starting with [#] are skipped. Returns [Error] for a file that cannot be read or
-    has a bad line (naming the line); never raises. *)
+    has a bad line, or a point whose time is before the previous point's (equal times are
+    allowed), naming the line; never raises. *)
 val of_series : string -> t Or_error.t Deferred.t
 
 (** Reads the whole source into a {!Path.t} for a venue that pulls its reference on its

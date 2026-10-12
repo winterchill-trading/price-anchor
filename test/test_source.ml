@@ -127,6 +127,47 @@ let%expect_test "a missing or malformed series file is an error, not an exceptio
       |}])
 ;;
 
+let%expect_test "a series point going back in time is refused, an equal time is kept" =
+  with_dir "series-order" (fun dir ->
+    let show contents =
+      let path = dir ^/ "points.txt" in
+      let%bind () = Writer.save path ~contents in
+      match%bind Source.of_series path with
+      | Error e ->
+        print_s [%message "" ~error:(e : Error.t)];
+        return ()
+      | Ok source ->
+        let%map path = Source.to_path source >>| ok_exn in
+        List.iter [ 0.; 1. ] ~f:(fun s ->
+          let elapsed = Time_ns.Span.of_sec s in
+          print_s
+            [%message
+              "" (elapsed : Time_ns.Span.t) ~price:(Path.price_at path ~elapsed : Price.t)])
+    in
+    let%bind () =
+      show
+        "2025-10-09T08:53:20Z 100000\n\
+         2025-10-09T08:53:21Z 100010\n\
+         2025-10-09T08:53:21Z 100020\n"
+    in
+    let%map () =
+      show
+        "# time price\n\
+         2025-10-09T08:53:20Z 100000\n\n\
+         2025-10-09T08:53:21Z 100010\n\
+         2025-10-09T08:53:19Z 100020\n"
+    in
+    [%expect
+      {|
+      ((elapsed 0s) (price 100000))
+      ((elapsed 1s) (price 100020))
+      (error
+       (("series file" (path series-order/points.txt))
+        ("series line goes back in time" (line_number 5)
+         (line "2025-10-09T08:53:19Z 100020") (previous "2025-10-09 08:53:21Z"))))
+      |}])
+;;
+
 let%expect_test "speed paces recorded time on the time source" =
   let time_source = Time_source.create ~now:Helpers.epoch () in
   let h = new_anchor () in

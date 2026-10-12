@@ -124,11 +124,32 @@ let of_series path =
   in
   Or_error.tag_s ~tag:[%message "series file" (path : string)] lines
   |> Or_error.bind ~f:(fun lines ->
-    List.filter lines ~f:(fun line ->
-      let line = String.strip line in
-      not (String.is_empty line || String.is_prefix line ~prefix:"#"))
-    |> List.map ~f:parse_series_line
+    List.filter_mapi lines ~f:(fun i line ->
+      let stripped = String.strip line in
+      if String.is_empty stripped || String.is_prefix stripped ~prefix:"#"
+      then None
+      else Some (i + 1, line, parse_series_line line))
+    |> List.map ~f:(fun (line_number, line, point) ->
+      Or_error.map point ~f:(fun point -> line_number, line, point))
     |> Or_error.combine_errors
+    |> Or_error.bind ~f:(fun points ->
+      (* Equal times are fine (a step); a time before the previous point's is refused
+         rather than dropped later by [to_path]. *)
+      let rec check prev = function
+        | [] -> Ok ()
+        | (line_number, line, (time, _)) :: rest ->
+          (match prev with
+           | Some previous when Time_ns.( < ) time previous ->
+             Or_error.error_s
+               [%message
+                 "series line goes back in time"
+                   (line_number : int)
+                   (line : string)
+                   (previous : Time_ns.Alternate_sexp.t)]
+           | _ -> check (Some time) rest)
+      in
+      Or_error.map (check None points) ~f:(fun () ->
+        List.map points ~f:(fun (_, _, point) -> point)))
     |> Or_error.tag_s ~tag:[%message "series file" (path : string)]
     |> Or_error.map ~f:(fun points ->
       Pipe.of_list
