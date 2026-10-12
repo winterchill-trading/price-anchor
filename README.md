@@ -81,6 +81,51 @@ Offline (`Stepped` with `Config.sim = None`): feed the anchor every reference ev
 each step's time before the strategy reacts; `Stepped.check_replay` then checks the whole
 run.
 
+## TradFi
+
+The TradFi simulators (`nyse-sim`, `cboe-sim`, `cme-sim`) have no free real-time source:
+nothing to shadow and no trade flow to replay. The noise traders stay the book's only
+liquidity and the anchor turns their walk into mean reversion around a reference series
+(a series file, or a recorded crypto instrument scaled by a factor). The venue owns its
+clock and its trading phases, so the anchor neither steps the clock nor moves the price
+outside continuous trading:
+
+```ocaml
+let anchor =
+  Price_anchor.Anchor.create
+    ~market_sim
+    ~noise_traders:(Market_sim.config market_sim).noise_traders
+    ~half_life:Time_ns.Span.second   (* pull the walk, do not pin it *)
+    ~step_clock:false                (* the venue's clock *)
+    ~levels:0                        (* no depth to shadow *)
+    ~may_engage:(fun () ->           (* core session, no auction, no LULD pause or limit halt *)
+      Venue.continuous_trading venue ~symbol_id)
+    ~last_trade:(fun () -> Venue.last_price venue ~symbol_id)
+    ~price_factor
+    ~exchange
+    ~reference:(Market_data.Instrument.of_string "cme:ES")
+    ~sim_symbol
+    ()
+in
+(* the series, paced on the venue's time source: *)
+let%bind source = Price_anchor.Source.of_series path >>| ok_exn in
+don't_wait_for (Price_anchor.Source.run ~speed:1. ~time_source source ~anchor);
+(* on each noise tick, after the venue stepped its clock: *)
+Price_anchor.Anchor.step anchor ~now:(Exchange.now exchange)
+```
+
+- `half_life` sets the reference through `Market_sim.set_reference ~half_life`; without it
+  the reference is pinned.
+- While `may_engage` says no, the anchor hands the symbol back to the free walk
+  (`clear_reference`, once) and counts waits (`Stats.waits`). When it says yes again the
+  walk restarts from `last_trade` (the opening or reopening auction's price) and climbs
+  back towards the reference (`Stats.resumes`).
+- A series alone never goes stale between its points; pass `max_staleness` to change
+  that. Feeds keep the 5 s default.
+- `Source.of_series` returns `Error` for a missing or malformed file.
+- Price bands (LULD, CME daily limits) stay the venue's job: clamp the target before it
+  reaches the anchor if the noise traders must not trade through them.
+
 ## Binary
 
 ```
