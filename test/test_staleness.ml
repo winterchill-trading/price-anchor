@@ -101,7 +101,7 @@ let%expect_test "stale until the first snapshot, after silence and after a gap" 
     ((stale ()) (went_stale 3) (stale_ns 1010000000) (gaps 1) (events 7)
      (ignored 0) (marks_set 3) (funding_rates_set 0)
      (shadow ((placed 9) (cancelled 6) (skipped 0) (consumed 0))) (replays 0)
-     (replays_rejected 0) (waits 0) (resumes 0) (clamped 0))
+     (replays_rejected 0) (waits 0) (resumes 0) (pauses 0) (clamped 0))
     |}]
 ;;
 

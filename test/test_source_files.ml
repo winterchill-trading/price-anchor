@@ -131,7 +131,7 @@ let%expect_test "raw minute files through a normalizer, with a disconnect" =
       ((stale ()) (went_stale 2) (stale_ns 1900000000) (gaps 1) (events 4)
        (ignored 0) (marks_set 2) (funding_rates_set 0)
        (shadow ((placed 4) (cancelled 2) (skipped 0) (consumed 0))) (replays 0)
-       (replays_rejected 0) (waits 0) (resumes 0) (clamped 0))
+       (replays_rejected 0) (waits 0) (resumes 0) (pauses 0) (clamped 0))
       |}])
 ;;
 

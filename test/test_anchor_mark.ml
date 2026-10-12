@@ -55,7 +55,7 @@ let%expect_test "mark precedence: funding mark, then mid, then last trade" =
     ((stale ()) (went_stale 1) (stale_ns 0) (gaps 0) (events 6) (ignored 0)
      (marks_set 3) (funding_rates_set 1)
      (shadow ((placed 4) (cancelled 2) (skipped 0) (consumed 0))) (replays 0)
-     (replays_rejected 0) (waits 0) (resumes 0) (clamped 0))
+     (replays_rejected 0) (waits 0) (resumes 0) (pauses 0) (clamped 0))
     |}]
 ;;
 
@@ -97,7 +97,7 @@ let%expect_test "events of another instrument are ignored" =
     ((stale (Waiting_for_book)) (went_stale 1) (stale_ns 0) (gaps 0) (events 0)
      (ignored 1) (marks_set 0) (funding_rates_set 0)
      (shadow ((placed 0) (cancelled 0) (skipped 0) (consumed 0))) (replays 0)
-     (replays_rejected 0) (waits 0) (resumes 0) (clamped 0))
+     (replays_rejected 0) (waits 0) (resumes 0) (pauses 0) (clamped 0))
     |}]
 ;;
 
@@ -142,7 +142,8 @@ let%expect_test "an anchored run with noise traders replays bit for bit from its
       ((stale ()) (went_stale 1) (stale_ns 0) (gaps 0) (events 123) (ignored 0)
        (marks_set 3) (funding_rates_set 3)
        (shadow ((placed 118) (cancelled 116) (skipped 5) (consumed 2)))
-       (replays 4) (replays_rejected 0) (waits 0) (resumes 0) (clamped 0))))
+       (replays 4) (replays_rejected 0) (waits 0) (resumes 0) (pauses 0)
+       (clamped 0))))
     (replay (inputs 641) (events 388) (same_events true) (same_mark true))
     |}]
 ;;

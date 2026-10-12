@@ -98,6 +98,7 @@ module Stats : sig
     (** trade-replay IOC orders the engine rejected (e.g. below the minimum order value) *)
     ; waits : int (** mark updates held back because [may_engage] said no *)
     ; resumes : int (** times [may_engage] allowed the anchor again after a wait *)
+    ; pauses : int (** times [may_engage] first said no, handing the symbol back *)
     ; clamped : int (** marks or references set at a target [clamp] moved *)
     }
   [@@deriving sexp_of]
@@ -130,6 +131,10 @@ type t
       engages again (default: none, the walk continues from where it is).
     - [step_clock]: whether the anchor steps the exchange clock to each event's simulated
       time (default true); false for venues that own their clock.
+    - [path]: a reference pulled on the venue's clock instead of pushed points: each
+      {!step} takes its price at [now] minus the exchange's time at [create] as the
+      reference series price ({!apply_price} without a [recv_ts]), so the reference is
+      fresh from the first step. Use it or {!apply_price}, not both.
     - [balance]: deposited into each of the two anchor accounts (default $10B).
     - [log]: receives one line per notable change (default: dropped). *)
 val create
@@ -145,6 +150,7 @@ val create
   -> ?last_trade:(unit -> Price.t option)
   -> ?step_clock:bool
   -> ?clamp:(Price.t -> Price.t)
+  -> ?path:Path.t
   -> ?balance:Usd.t
   -> ?log:(Sexp.t -> unit)
   -> ?market_sim:Market_sim.t
@@ -169,12 +175,18 @@ val apply_price : t -> recv_ts:Time_ns.t -> Price.t -> unit
 val gap : t -> Market_data.Gap.t -> unit
 
 (** Called by the simulator's clock after it steps the exchange to [now] (nanoseconds):
-    marks the reference stale when it has been silent for [max_staleness]; otherwise
-    starts tracking the queue of newly placed simulated orders and applies a mark change
-    held back by [mark_interval]. *)
+    follows [path] when there is one, then marks the reference stale when it has been
+    silent for [max_staleness]; otherwise starts tracking the queue of newly placed
+    simulated orders and applies a mark change held back by [mark_interval]. *)
 val step : t -> now:int -> unit
 
 val stats : t -> Stats.t
+
+(** The last price passed to [Market_sim.set_reference] or [Exchange.set_mark], after
+    [clamp]; [None] until the first, and again from a resume or a return to fresh until
+    the next. *)
+val last_set : t -> Price.t option
+
 val is_stale : t -> bool
 
 (** Whether [may_engage] said no at the last update and has not said yes since. *)

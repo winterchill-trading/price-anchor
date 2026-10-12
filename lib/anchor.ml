@@ -25,6 +25,7 @@ module Stats = struct
     ; replays_rejected : int
     ; waits : int
     ; resumes : int
+    ; pauses : int
     ; clamped : int
     }
   [@@deriving sexp_of]
@@ -45,6 +46,8 @@ type t =
   ; step_clock : bool
   ; venue_last_trade : unit -> Price.t option
   ; clamp : (Price.t -> Price.t) option
+  ; path : Path.t option
+  ; path_start : int (** the exchange's time at [create]: [elapsed = 0] of [path] *)
   ; funding_ratio : float (** sim interval / reference interval *)
   ; anchor_account : Account.t
   ; taker_account : Account.t
@@ -76,6 +79,7 @@ type t =
   ; mutable paused : bool
   ; mutable waits : int
   ; mutable resumes : int
+  ; mutable pauses : int
   ; mutable clamped : int
   }
 
@@ -94,6 +98,7 @@ let create
   ?(last_trade = fun () -> None)
   ?(step_clock = true)
   ?clamp
+  ?path
   ?(balance = Usd.of_int 10_000_000_000)
   ?(log = ignore)
   ?market_sim
@@ -147,6 +152,8 @@ let create
     ; step_clock
     ; venue_last_trade = last_trade
     ; clamp
+    ; path
+    ; path_start = Exchange.now exchange
     ; funding_ratio
     ; anchor_account
     ; taker_account = name "anchor-taker"
@@ -179,6 +186,7 @@ let create
     ; paused = false
     ; waits = 0
     ; resumes = 0
+    ; pauses = 0
     ; clamped = 0
     }
   in
@@ -206,11 +214,13 @@ let stats t =
   ; replays_rejected = t.replays_rejected
   ; waits = t.waits
   ; resumes = t.resumes
+  ; pauses = t.pauses
   ; clamped = t.clamped
   }
 ;;
 
 let offset t = t.offset
+let last_set t = t.mark_set
 let is_paused t = t.paused
 let is_stale t = Option.is_some t.stale
 let anchor_account t = t.anchor_account
@@ -341,6 +351,7 @@ let may_engage t =
     if not t.paused
     then (
       t.paused <- true;
+      t.pauses <- t.pauses + 1;
       Option.iter t.market_sim ~f:(fun sim -> Market_sim.clear_reference sim t.sim_symbol);
       t.log
         [%message
@@ -569,7 +580,17 @@ let apply_price t ~recv_ts px =
   if not (is_stale t) then update_mark t ~now
 ;;
 
+(* A path is pulled on the venue's clock: its price at [now] is the series price. *)
+let follow_path t ~now =
+  Option.iter t.path ~f:(fun path ->
+    let elapsed = Time_ns.Span.of_int_ns (Int.max 0 (now - t.path_start)) in
+    t.series_price <- Some (Path.price_at path ~elapsed);
+    t.last_event_at <- Some now;
+    if not (t.has_l2 || t.has_bbo) then go_fresh t ~now)
+;;
+
 let step t ~now =
+  follow_path t ~now;
   check_silence t ~now;
   if not (is_stale t)
   then (
