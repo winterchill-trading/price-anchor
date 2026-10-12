@@ -68,6 +68,13 @@ val parse_series_line : string -> (Time_ns.t * Market_data.Price.t) Or_error.t
     has a bad line (naming the line); never raises. *)
 val of_series : string -> t Or_error.t Deferred.t
 
+(** Reads the whole source into a {!Path.t} for a venue that pulls its reference on its
+    own clock: series points as they are; for events, the mid of the reference book (L2,
+    or BBO), else the last trade price. A gap drops the book. A point is kept when the
+    price changed and at least [min_interval] (default zero) of [recv_ts] passed since the
+    last kept one. Fails when the source has no price. *)
+val to_path : ?min_interval:Time_ns.Span.t -> t -> Path.t Or_error.t Deferred.t
+
 (** Applies every item to [anchor] ([Anchor.apply], [Anchor.gap], [Anchor.apply_price]),
     calling [on_item] after each. With [speed > 0.] recorded time is paced against
     [time_source] (default the wall clock): an item [d] after the first is applied

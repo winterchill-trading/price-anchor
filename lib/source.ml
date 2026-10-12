@@ -135,6 +135,48 @@ let of_series path =
         (List.map points ~f:(fun (recv_ts, price) -> Item.Price { recv_ts; price }))))
 ;;
 
+let to_path ?(min_interval = Time_ns.Span.zero) source =
+  let book = Ref_book.create () in
+  let last_trade = ref None in
+  let points = Queue.create () in
+  let last_at = ref None in
+  let%map () =
+    Pipe.iter_without_pushback source ~f:(fun (item : Item.t) ->
+      let price =
+        match item with
+        | Price { price; _ } -> Some price
+        | Gap _ ->
+          Ref_book.clear book;
+          None
+        | Event event ->
+          (match event with
+           | Trade trade -> last_trade := Some trade.price
+           | Bbo bbo -> Ref_book.apply_bbo book bbo
+           | L2 update -> Ref_book.apply_l2 book update
+           | Funding _ -> ());
+          Option.first_some (Ref_book.mid book) !last_trade
+      in
+      Option.iter price ~f:(fun px ->
+        let ts = Item.recv_ts item in
+        let due =
+          match !last_at with
+          | None -> true
+          | Some at -> Time_ns.Span.( >= ) (Time_ns.diff ts at) min_interval
+        in
+        let changed =
+          match Queue.last points with
+          | None -> true
+          | Some (_, p) -> not (Market_data.Price.equal p px)
+        in
+        if due && changed
+        then (
+          Queue.enqueue points (ts, px);
+          last_at := Some ts)))
+  in
+  Path.series (Queue.to_list points)
+  |> Or_error.tag ~tag:"no reference price in the source"
+;;
+
 let apply anchor : Item.t -> unit = function
   | Event e -> Anchor.apply anchor e
   | Gap g -> Anchor.gap anchor g
