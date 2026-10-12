@@ -18,7 +18,22 @@ let positive px =
 let series points =
   let open Or_error.Let_syntax in
   let%bind () = Or_error.all_unit (List.map points ~f:(fun (_, px) -> positive px)) in
-  match List.stable_sort points ~compare:(fun (a, _) (b, _) -> Time_ns.compare a b) with
+  let%bind () =
+    (* Equal times are a step; an earlier time than the previous point's is refused. *)
+    List.foldi points ~init:(Ok None) ~f:(fun index acc (time, _) ->
+      let%bind prev = acc in
+      match prev with
+      | Some previous when Time_ns.( < ) time previous ->
+        Or_error.error_s
+          [%message
+            "reference point goes back in time"
+              (index : int)
+              ~time:(time : Time_ns.Alternate_sexp.t)
+              (previous : Time_ns.Alternate_sexp.t)]
+      | _ -> Ok (Some time))
+    |> Or_error.ignore_m
+  in
+  match points with
   | [] -> Or_error.error_string "empty reference series"
   | points -> Ok (Series (Array.of_list points))
 ;;
