@@ -1,0 +1,13 @@
+(library
+ (name price_anchor)
+ (public_name price-anchor)
+ (libraries
+  core
+  async
+  fixed-decimal
+  exchange-core
+  exchange-core-engine
+  order-book
+  market-data)
+ (preprocess
+  (pps ppx_jane)))
