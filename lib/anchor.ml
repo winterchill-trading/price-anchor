@@ -8,6 +8,7 @@ module Stats = struct
     ; ignored : int
     ; marks_set : int
     ; funding_rates_set : int
+    ; shadow : Shadow.Stats.t
     }
   [@@deriving sexp_of]
 end
@@ -18,12 +19,16 @@ type t =
   ; reference : Market_data.Instrument.t
   ; sim_symbol : Symbol.t
   ; scale : Scale.t
+  ; levels : int
   ; mark_interval_ns : int
   ; funding_ratio : float (** sim interval / reference interval *)
   ; anchor_account : Account.t
   ; taker_account : Account.t
   ; log : Sexp.t -> unit
   ; book : Ref_book.t
+  ; shadow : Shadow.t
+  ; queue : Queue_ahead.t
+  ; mutable has_l2 : bool
   ; mutable offset : int option
   ; mutable funding_mark : Price.t option
   ; mutable last_trade : Price.t option
@@ -41,6 +46,7 @@ let default_funding_interval = Time_ns.Span.of_hr 8.
 let create
   ?price_factor
   ?size_factor
+  ?(levels = 5)
   ?(mark_interval = Time_ns.Span.of_int_ms 100)
   ?funding_interval
   ?(noise_traders = 0)
@@ -74,18 +80,25 @@ let create
     Account.of_string
       (sprintf "%s:%s" prefix (Market_data.Instrument.to_string reference))
   in
+  let scale = Scale.create ?price_factor ?size_factor instrument in
+  let anchor_account = name "anchor" in
   let t =
     { exchange
     ; market_sim
     ; reference
     ; sim_symbol
-    ; scale = Scale.create ?price_factor ?size_factor instrument
+    ; scale
+    ; levels
     ; mark_interval_ns = Time_ns.Span.to_int_ns mark_interval
     ; funding_ratio
-    ; anchor_account = name "anchor"
+    ; anchor_account
     ; taker_account = name "anchor-taker"
     ; log
     ; book = Ref_book.create ()
+    ; shadow =
+        Shadow.create exchange ~account:anchor_account ~symbol:sim_symbol ~scale ~levels
+    ; queue = Queue_ahead.create ()
+    ; has_l2 = false
     ; offset = None
     ; funding_mark = None
     ; last_trade = None
@@ -110,6 +123,7 @@ let stats t =
   ; ignored = t.ignored
   ; marks_set = t.marks_set
   ; funding_rates_set = t.funding_rates_set
+  ; shadow = Shadow.stats t.shadow
   }
 ;;
 
@@ -117,6 +131,48 @@ let offset t = t.offset
 let anchor_account t = t.anchor_account
 let taker_account t = t.taker_account
 let sim_symbol t = t.sim_symbol
+let shadow_orders t = Shadow.orders t.shadow
+let queue_ahead t order_id = Queue_ahead.find t.queue order_id
+
+let is_anchor t account =
+  Account.equal account t.anchor_account || Account.equal account t.taker_account
+;;
+
+let refresh_queue t =
+  Option.iter (Exchange.book t.exchange t.sim_symbol) ~f:(fun book ->
+    Queue_ahead.refresh t.queue book ~exclude:(is_anchor t) ~shown:(Shadow.shown t.shadow))
+;;
+
+(* Caps queues at prices the shadow levels cover by the reference size there. *)
+let cap_queue t =
+  let full = Shadow.full_levels t.book t.scale ~levels:t.levels in
+  let reference side px =
+    let levels =
+      List.filter full ~f:(fun (l : Shadow.Level.t) -> Side.equal l.side side)
+    in
+    match List.last levels with
+    | None -> None
+    | Some worst ->
+      let covered =
+        match side with
+        | Buy -> Price.( >= ) px worst.px
+        | Sell -> Price.( <= ) px worst.px
+      in
+      if not covered
+      then None
+      else
+        Some
+          (List.find levels ~f:(fun l -> Price.equal l.px px)
+           |> Option.value_map ~default:Size.zero ~f:(fun l -> l.size))
+  in
+  Queue_ahead.cap t.queue ~reference
+;;
+
+let on_book_update t =
+  Shadow.reconcile t.shadow t.book;
+  refresh_queue t;
+  cap_queue t
+;;
 
 let raw_reference_price t =
   match t.funding_mark with
@@ -191,11 +247,22 @@ let apply t (event : Market_data.Event.t) =
     t.events <- t.events + 1;
     let now = advance_clock t event in
     (match event with
-     | L2 update -> Ref_book.apply_l2 t.book update
-     | Bbo bbo -> Ref_book.apply_bbo t.book bbo
+     | L2 update ->
+       t.has_l2 <- true;
+       Ref_book.apply_l2 t.book update;
+       on_book_update t
+     | Bbo bbo ->
+       (* With depth available, the L2 book is the better source. *)
+       if not t.has_l2
+       then (
+         Ref_book.apply_bbo t.book bbo;
+         on_book_update t)
      | Trade trade -> t.last_trade <- Some trade.price
      | Funding funding -> update_funding t funding);
     update_mark t ~now)
 ;;
 
-let step t ~now = update_mark t ~now
+let step t ~now =
+  refresh_queue t;
+  update_mark t ~now
+;;

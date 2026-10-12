@@ -49,7 +49,8 @@ let%expect_test "mark precedence: funding mark, then mid, then last trade" =
     ("trade under a book" (now_ms 300) (mark (100015)))
     ("funding mark" (now_ms 400) (mark (100100.1)))
     ("book moves" (now_ms 500) (mark (100100.1)))
-    ((events 5) (ignored 0) (marks_set 3) (funding_rates_set 1))
+    ((events 5) (ignored 0) (marks_set 3) (funding_rates_set 1)
+     (shadow ((placed 4) (cancelled 2) (skipped 0) (consumed 0))))
     |}]
 ;;
 
@@ -86,7 +87,11 @@ let%expect_test "events of another instrument are ignored" =
        ; trade_id = "x"
        });
   print_s [%sexp (Anchor.stats h.anchor : Anchor.Stats.t)];
-  [%expect {| ((events 0) (ignored 1) (marks_set 0) (funding_rates_set 0)) |}]
+  [%expect
+    {|
+    ((events 0) (ignored 1) (marks_set 0) (funding_rates_set 0)
+     (shadow ((placed 0) (cancelled 0) (skipped 0) (consumed 0))))
+    |}]
 ;;
 
 (* A reference that drifts up then down, with trades and funding. *)
@@ -126,7 +131,9 @@ let%expect_test "an anchored run with noise traders replays bit for bit from its
   [%expect
     {|
     ((mark (100073)) (reference (100073))
-     (stats ((events 123) (ignored 0) (marks_set 3) (funding_rates_set 3))))
-    (replay (inputs 407) (events 147) (same_events true) (same_mark true))
+     (stats
+      ((events 123) (ignored 0) (marks_set 3) (funding_rates_set 3)
+       (shadow ((placed 78) (cancelled 77) (skipped 42) (consumed 0))))))
+    (replay (inputs 604) (events 344) (same_events true) (same_mark true))
     |}]
 ;;

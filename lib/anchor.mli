@@ -25,7 +25,13 @@
     later {!apply} or {!step}. With a [market_sim], the reference is pinned through
     [Market_sim.set_reference] (which also sets the mark), so noise traders quote around
     it. Funding rates are converted to the exchange's funding interval:
-    [rate * sim_interval / reference_interval]. *)
+    [rate * sim_interval / reference_interval].
+
+    {2 Shadow levels}
+
+    On each reference book update (L2, or BBO for sources without depth) the reference's
+    top [levels] per side are kept resting from the anchor account ({!Shadow}), and
+    simulated orders get a queue position behind the reference size ({!Queue_ahead}). *)
 
 open! Core
 open! Exchange_core
@@ -37,6 +43,7 @@ module Stats : sig
     ; ignored : int (** events of another instrument *)
     ; marks_set : int
     ; funding_rates_set : int
+    ; shadow : Shadow.Stats.t
     }
   [@@deriving sexp_of]
 end
@@ -47,6 +54,7 @@ type t
     simulated one, which must be an instrument of [exchange].
 
     - [price_factor], [size_factor]: see {!Scale} (default [1.]).
+    - [levels]: shadow levels per side (default 5).
     - [mark_interval]: minimum simulated time between two [set_mark] calls (default
       100ms).
     - [funding_interval]: what one reference funding rate covers; defaults to the
@@ -58,6 +66,7 @@ type t
 val create
   :  ?price_factor:float
   -> ?size_factor:float
+  -> ?levels:int
   -> ?mark_interval:Time_ns.Span.t
   -> ?funding_interval:Time_ns.Span.t
   -> ?noise_traders:int
@@ -74,7 +83,8 @@ val create
 val apply : t -> Market_data.Event.t -> unit
 
 (** Called by the simulator's clock after it steps the exchange to [now] (nanoseconds):
-    applies a mark change held back by [mark_interval]. *)
+    starts tracking the queue of newly placed simulated orders and applies a mark change
+    held back by [mark_interval]. *)
 val step : t -> now:int -> unit
 
 val stats : t -> Stats.t
@@ -93,3 +103,11 @@ val anchor_account : t -> Account.t
 val taker_account : t -> Account.t
 
 val sim_symbol : t -> Symbol.t
+
+(** The anchor account's resting shadow orders, by order id. *)
+val shadow_orders : t -> Shadow.Order.t list
+
+(** Reference size ahead of a simulated resting order at its price ({!Queue_ahead});
+    [None] for orders not tracked (anchor orders, orders placed since the last {!apply} or
+    {!step}). *)
+val queue_ahead : t -> Order_id.t -> Size.t option
