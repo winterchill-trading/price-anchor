@@ -45,6 +45,8 @@ type t =
   ; shadow : Shadow.t
   ; queue : Queue_ahead.t
   ; mutable has_l2 : bool
+  ; mutable has_bbo : bool
+  ; mutable series_price : Price.t option
   ; mutable stale : Stale_reason.t option
   ; mutable stale_since : int
   ; mutable stale_ns : int
@@ -126,6 +128,8 @@ let create
         Shadow.create exchange ~account:anchor_account ~symbol:sim_symbol ~scale ~levels
     ; queue = Queue_ahead.create ()
     ; has_l2 = false
+    ; has_bbo = false
+    ; series_price = None
     ; stale = Some Waiting_for_book
     ; stale_since = Exchange.now exchange
     ; stale_ns = 0
@@ -220,7 +224,7 @@ let on_book_update t =
 ;;
 
 let raw_reference_price t =
-  match t.funding_mark with
+  match Option.first_some t.series_price t.funding_mark with
   | Some _ as p -> p
   | None ->
     (match Ref_book.mid t.book with
@@ -398,8 +402,8 @@ let gap t (gap : Market_data.Gap.t) =
 
 (* Moves the exchange clock to the event's simulated time. Returns the event's simulated
    time ([recv_ts + offset]) and the time it is applied at (not before the clock). *)
-let advance_clock t (event : Market_data.Event.t) =
-  let recv_ns = Time_ns.to_int_ns_since_epoch (Market_data.Event.recv_ts event) in
+let advance_clock t recv_ts =
+  let recv_ns = Time_ns.to_int_ns_since_epoch recv_ts in
   let now = Exchange.now t.exchange in
   let offset =
     match t.offset with
@@ -423,7 +427,7 @@ let apply t (event : Market_data.Event.t) =
   then t.ignored <- t.ignored + 1
   else (
     t.events <- t.events + 1;
-    let event_time, now = advance_clock t event in
+    let event_time, now = advance_clock t (Market_data.Event.recv_ts event) in
     check_silence t ~now:event_time;
     t.last_event_at <- Some event_time;
     (match event with
@@ -436,6 +440,7 @@ let apply t (event : Market_data.Event.t) =
        if not (is_stale t) then on_book_update t
      | Bbo bbo ->
        (* With depth available, the L2 book is the better source. *)
+       t.has_bbo <- true;
        if not t.has_l2
        then (
          Ref_book.apply_bbo t.book bbo;
@@ -446,6 +451,17 @@ let apply t (event : Market_data.Event.t) =
        if not (is_stale t) then replay_trade t trade
      | Funding funding -> update_funding t funding);
     if not (is_stale t) then update_mark t ~now)
+;;
+
+let apply_price t ~recv_ts px =
+  t.events <- t.events + 1;
+  let event_time, now = advance_clock t recv_ts in
+  check_silence t ~now:event_time;
+  t.last_event_at <- Some event_time;
+  t.series_price <- Some px;
+  (* A series is the whole source unless a book arrives too. *)
+  if not (t.has_l2 || t.has_bbo) then go_fresh t ~now;
+  if not (is_stale t) then update_mark t ~now
 ;;
 
 let step t ~now =

@@ -17,12 +17,13 @@
 
     {2 Mark price and funding}
 
-    The reference price is, in order of precedence, the venue's mark price (from funding
-    events), the mid of the reference book, the last trade price; it is scaled and rounded
-    to the simulated instrument's tick. The anchor sets the simulated mark to it when it
-    differs from the last one set (a change of at least one tick), at most once per
-    [mark_interval] of simulated time; a change held back by the interval is applied by a
-    later {!apply} or {!step}. With a [market_sim], the reference is pinned through
+    The reference price is, in order of precedence, a reference series price
+    ({!apply_price}), the venue's mark price (from funding events), the mid of the
+    reference book, the last trade price; it is scaled and rounded to the simulated
+    instrument's tick. The anchor sets the simulated mark to it when it differs from the
+    last one set (a change of at least one tick), at most once per [mark_interval] of
+    simulated time; a change held back by the interval is applied by a later {!apply} or
+    {!step}. With a [market_sim], the reference is pinned through
     [Market_sim.set_reference] (which also sets the mark), so noise traders quote around
     it. Funding rates are converted to the exchange's funding interval:
     [rate * sim_interval / reference_interval].
@@ -122,6 +123,12 @@ val create
 
 (** Applies one reference event. Events of other instruments are counted and ignored. *)
 val apply : t -> Market_data.Event.t -> unit
+
+(** A point of a reference series ({!Source.of_series}): a reference price with no book or
+    trades, for venues without a data source. It takes precedence over every other
+    reference price, and makes the reference fresh unless the source also carries a book.
+    Applied at [recv_ts + offset] like an event. *)
+val apply_price : t -> recv_ts:Time_ns.t -> Price.t -> unit
 
 (** A break reported by the source ({!Market_data.Feed.With_gaps}, an empty raw line):
     when it concerns the reference, the reference book is dropped and the anchor goes

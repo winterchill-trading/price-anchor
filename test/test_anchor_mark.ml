@@ -146,3 +146,18 @@ let%expect_test "an anchored run with noise traders replays bit for bit from its
     (replay (inputs 641) (events 388) (same_events true) (same_mark true))
     |}]
 ;;
+
+let%expect_test "a reference series alone makes the anchor fresh and sets the mark" =
+  let h = Harness.create (fun ~exchange ~market_sim:_ -> anchor ~exchange ()) in
+  Anchor.apply_price h.anchor ~recv_ts:(Helpers.ms 0) (Price.of_string "5000.25");
+  show_mark h "series";
+  Anchor.apply_price h.anchor ~recv_ts:(Helpers.ms 200) (Price.of_string "5001.33");
+  show_mark h "series";
+  print_s [%sexp (Anchor.is_stale h.anchor : bool)];
+  [%expect
+    {|
+    (series (now_ms 0) (mark (5000.3)))
+    (series (now_ms 200) (mark (5001.3)))
+    false
+    |}]
+;;
