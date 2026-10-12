@@ -16,8 +16,8 @@ let show path elapsed =
 let%expect_test "a series is a step function from its first point" =
   let path =
     Path.series
-      [ at "2026-01-02 14:30:00Z", px "100"
-      ; at "2026-01-02 14:30:10Z", px "101"
+      [ at "2026-01-02 14:30:10Z", px "101"
+      ; at "2026-01-02 14:30:00Z", px "100"
       ; at "2026-01-02 14:30:30Z", px "102"
       ]
     |> ok_exn
@@ -49,13 +49,6 @@ let%expect_test "bad inputs" =
   let show r = print_s [%sexp (r : Path.t Or_error.t)] in
   show (Path.series []);
   show (Path.series [ at "2026-01-02 14:30:00Z", px "0" ]);
-  show
-    (Path.series
-       [ at "2026-01-02 14:30:00Z", px "100"
-       ; at "2026-01-02 14:30:10Z", px "101"
-       ; at "2026-01-02 14:30:10Z", px "102"
-       ; at "2026-01-02 14:30:05Z", px "103"
-       ]);
   show (Path.fixed_of_string "100,abc");
   show (Path.fixed_of_string "-1");
   show (Path.fixed_of_string "1,2,3");
@@ -63,9 +56,6 @@ let%expect_test "bad inputs" =
     {|
     (Error "empty reference series")
     (Error ("reference price must be positive" (px 0)))
-    (Error
-     ("reference point goes back in time" (index 3) (time "2026-01-02 14:30:05Z")
-      (previous "2026-01-02 14:30:10Z")))
     (Error
      (("fixed reference" 100,abc) (Invalid_argument "Float.of_string abc")))
     (Error (("fixed reference" -1) ("reference price must be positive" (px -1))))

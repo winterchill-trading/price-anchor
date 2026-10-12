@@ -18,8 +18,7 @@ type t = private
       }
 [@@deriving sexp_of]
 
-(** Fails when empty, a price is not positive, or a point's time is before the previous
-    point's (naming its index); equal times are allowed. *)
+(** Sorts the points by time (stable); fails when empty or a price is not positive. *)
 val series : (Time_ns.t * Price.t) list -> t Or_error.t
 
 (** Fails when the price is not positive or the drift not finite. *)
