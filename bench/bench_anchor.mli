@@ -1,0 +1,1 @@
+(*_ Benchmark entry point. *)

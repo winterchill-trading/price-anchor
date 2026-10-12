@@ -1,0 +1,5 @@
+(executable
+ (name bench_anchor)
+ (libraries core exchange-core exchange-core-engine market-data price-anchor)
+ (preprocess
+  (pps ppx_jane)))
