@@ -98,6 +98,7 @@ module Stats : sig
     (** trade-replay IOC orders the engine rejected (e.g. below the minimum order value) *)
     ; waits : int (** mark updates held back because [may_engage] said no *)
     ; resumes : int (** times [may_engage] allowed the anchor again after a wait *)
+    ; clamped : int (** marks or references set at a target [clamp] moved *)
     }
   [@@deriving sexp_of]
 end
@@ -143,6 +144,7 @@ val create
   -> ?may_engage:(unit -> bool)
   -> ?last_trade:(unit -> Price.t option)
   -> ?step_clock:bool
+  -> ?clamp:(Price.t -> Price.t)
   -> ?balance:Usd.t
   -> ?log:(Sexp.t -> unit)
   -> ?market_sim:Market_sim.t

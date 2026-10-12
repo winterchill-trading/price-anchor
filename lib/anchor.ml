@@ -25,6 +25,7 @@ module Stats = struct
     ; replays_rejected : int
     ; waits : int
     ; resumes : int
+    ; clamped : int
     }
   [@@deriving sexp_of]
 end
@@ -43,6 +44,7 @@ type t =
   ; may_engage : unit -> bool
   ; step_clock : bool
   ; venue_last_trade : unit -> Price.t option
+  ; clamp : (Price.t -> Price.t) option
   ; funding_ratio : float (** sim interval / reference interval *)
   ; anchor_account : Account.t
   ; taker_account : Account.t
@@ -74,6 +76,7 @@ type t =
   ; mutable paused : bool
   ; mutable waits : int
   ; mutable resumes : int
+  ; mutable clamped : int
   }
 
 let default_funding_interval = Time_ns.Span.of_hr 8.
@@ -90,6 +93,7 @@ let create
   ?(may_engage = fun () -> true)
   ?(last_trade = fun () -> None)
   ?(step_clock = true)
+  ?clamp
   ?(balance = Usd.of_int 10_000_000_000)
   ?(log = ignore)
   ?market_sim
@@ -142,6 +146,7 @@ let create
     ; may_engage
     ; step_clock
     ; venue_last_trade = last_trade
+    ; clamp
     ; funding_ratio
     ; anchor_account
     ; taker_account = name "anchor-taker"
@@ -174,6 +179,7 @@ let create
     ; paused = false
     ; waits = 0
     ; resumes = 0
+    ; clamped = 0
     }
   in
   Exchange.deposit exchange t.anchor_account balance;
@@ -200,6 +206,7 @@ let stats t =
   ; replays_rejected = t.replays_rejected
   ; waits = t.waits
   ; resumes = t.resumes
+  ; clamped = t.clamped
   }
 ;;
 
@@ -274,10 +281,21 @@ let reference_price t =
     Scale.price t.scale px ~direction:Nearest)
 ;;
 
+(* The target after the venue's clamp (LULD bands, daily limits), and whether the clamp
+   moved it. *)
+let clamp_target t px =
+  match t.clamp with
+  | None -> px, false
+  | Some clamp ->
+    let clamped = clamp px in
+    clamped, not (Price.equal clamped px)
+;;
+
 let set_mark t ~now =
   match reference_price t with
   | None -> ()
   | Some px ->
+    let px, was_clamped = clamp_target t px in
     let changed = not ([%equal: Price.t option] (Some px) t.mark_set) in
     let due =
       match t.mark_set_at with
@@ -291,7 +309,8 @@ let set_mark t ~now =
        | None -> Exchange.set_mark t.exchange t.sim_symbol px);
       t.mark_set <- Some px;
       t.mark_set_at <- Some now;
-      t.marks_set <- t.marks_set + 1)
+      t.marks_set <- t.marks_set + 1;
+      if was_clamped then t.clamped <- t.clamped + 1)
 ;;
 
 (* Whether the venue lets the anchor move the price now. The first refusal hands the
