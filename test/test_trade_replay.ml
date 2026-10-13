@@ -115,3 +115,31 @@ let%expect_test "asks fill on buy trades; orders behind the trade price do not" 
      (replays 1))
     |}]
 ;;
+
+let%expect_test "an order placed and one cancelled between two reference events" =
+  let h = setup () in
+  (* No [Anchor.step] after placing: the next event has to notice the new order itself. *)
+  let place size =
+    match
+      Exchange.place
+        h.exchange
+        client
+        (Order_request.limit btc Buy ~px:(px "100000") ~size:(sz size))
+    with
+    | Resting { order_id; _ } -> order_id
+    | s -> raise_s [%sexp (s : Order_status.t)]
+  in
+  let gone = place "0.4" in
+  let id = place "1" in
+  ignore (Exchange.cancel h.exchange client ~symbol:btc gone : Cancel_status.t);
+  Anchor.apply h.anchor (Helpers.trade ~at:10 Sell ~px:"100000" ~sz:"2.5");
+  show h id;
+  print_s [%message (Anchor.queue_ahead h.anchor gone : Size.t option)];
+  [%expect
+    {|
+    ((client_fills ("0.5 @ 100000")) (queue_ahead (0))
+     (bids ("100000 x 2.5" "99999 x 3")) (asks ("100001 x 1" "100002 x 2"))
+     (replays 1))
+    ("Anchor.queue_ahead h.anchor gone" ())
+    |}]
+;;
