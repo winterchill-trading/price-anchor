@@ -70,7 +70,7 @@ let%expect_test "words per apply" =
   [%expect {|
     ("unchanged BBO" (clients 0) (words 586))
     ("trade, no eligible fills" (clients 0) (words 40))
-    ("unchanged BBO" (clients 500) (words 1586))
-    ("trade, no eligible fills" (clients 500) (words 1040))
+    ("unchanged BBO" (clients 500) (words 586))
+    ("trade, no eligible fills" (clients 500) (words 40))
     |}]
 ;;

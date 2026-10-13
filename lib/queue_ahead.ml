@@ -22,14 +22,14 @@ and level =
   }
 
 type t =
-  { entries : entry Order_id.Table.t
+  { entries : entry Int.Table.t (** keyed by [Order_id.to_int_exn] *)
   ; bids : level Int.Table.t (** keyed by [Price.to_units] *)
   ; asks : level Int.Table.t
   ; mutable generation : int
   }
 
 let create () =
-  { entries = Order_id.Table.create ()
+  { entries = Int.Table.create ()
   ; bids = Int.Table.create ()
   ; asks = Int.Table.create ()
   ; generation = 0
@@ -53,7 +53,7 @@ let add t ~oid ~side ~px ~ahead ~seen =
    | This first -> first.prev <- This entry);
   level.head <- This entry;
   level.count <- level.count + 1;
-  Hashtbl.set t.entries ~key:oid ~data:entry
+  Hashtbl.set t.entries ~key:(Order_id.to_int_exn oid) ~data:entry
 ;;
 
 let remove t entry =
@@ -66,7 +66,7 @@ let remove t entry =
    | This next -> next.prev <- entry.prev);
   level.count <- level.count - 1;
   if level.count = 0 then Hashtbl.remove (levels t entry.side) (Price.to_units entry.px);
-  Hashtbl.remove t.entries entry.oid
+  Hashtbl.remove t.entries (Order_id.to_int_exn entry.oid)
 ;;
 
 let rec iter_level (e : entry or_null) ~f =
@@ -85,11 +85,12 @@ let refresh t book ~exclude ~shown =
   Order_book.iter book ~f:(fun (o : Order_book.Resting_order.t) ->
     if not (exclude o.owner)
     then (
-      match Hashtbl.find t.entries o.oid with
-      | Some e ->
-        e.seen <- generation;
-        decr removed
-      | None ->
+      let key = Order_id.to_int_exn o.oid in
+      if Hashtbl.mem t.entries key
+      then (
+        (Hashtbl.find_exn t.entries key).seen <- generation;
+        decr removed)
+      else
         add t ~oid:o.oid ~side:o.side ~px:o.px ~ahead:(shown o.side o.px) ~seen:generation))
   [@nontail];
   if !removed > 0
@@ -120,5 +121,5 @@ let trade t ~passive ~px ~size =
     iter_level level.head ~f:(fun e -> e.ahead <- Size.( - ) e.ahead (Size.min e.ahead size))
 ;;
 
-let find t oid = Hashtbl.find t.entries oid |> Option.map ~f:(fun e -> e.ahead)
+let find t oid = Hashtbl.find t.entries (Order_id.to_int_exn oid) |> Option.map ~f:(fun e -> e.ahead)
 let length t = Hashtbl.length t.entries
