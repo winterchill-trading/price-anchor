@@ -26,6 +26,10 @@ val best : t -> Side.t -> (Price.t * Size.t) option
     sides have a level. *)
 val mid : t -> Price.t option
 
+(** [mid] without allocating: [Null] where it returns [None]. The best prices are cached
+    when the book changes. *)
+val mid_or_null : t -> Price.t or_null
+
 (** The best [n] levels of a side, best first. *)
 val top : t -> Side.t -> n:int -> (Price.t * Size.t) list
 
