@@ -187,10 +187,41 @@ checks that the journal replays to the same mark and book.
 
 ## Performance
 
-`bench/bench_anchor.exe` (M-series laptop, 100k events, 75% L2 deltas at the top levels,
-25% trades, one event per millisecond): 6.5 us per event with an empty simulated book,
-9 us with 50 resting client orders, 36 us with 500. Each book update reconciles the
-shadows through the engine and scans the simulated book for new client orders.
+`bench/bench_anchor.exe`: 100k events, 75% L2 deltas at the top levels, 25% trades, one
+event per millisecond, against 0, 50 or 500 resting client orders. In the churn runs the
+client cancels and re-places one order before every event (not timed), so the anchor
+cannot skip its queue refresh. Microseconds and minor words per event, arm64 laptop (CI is
+amd64), before (`9aab036`) and after the performance work:
+
+| Run | dev | release | release `-O3` | words |
+| --- | --- | --- | --- | --- |
+| 0 orders | 5.9 / 5.8 | 5.7 / 5.6 | 4.9 / 4.8 | 2658 / 2625 |
+| 50 orders | 8.5 / 6.1 | 7.9 / 5.8 | 6.7 / 5.0 | 2841 / 2625 |
+| 500 orders | 34.8 / 7.0 | 31.3 / 6.6 | 25.6 / 5.5 | 4618 / 2625 |
+| 50 orders, churn | 10.3 / 8.7 | 9.6 / 8.0 | 8.2 / 7.0 | 2873 / 2723 |
+| 500 orders, churn | 42.9 / 17.4 | 39.3 / 15.2 | 32.8 / 13.3 | 4650 / 2723 |
+
+What changed:
+
+- `Queue_ahead` indexes its entries by price, in order id order, as intrusive lists: a
+  reference trade and a cap touch one price's entries, forgetting an order is O(1), and
+  `refresh` walks each book level against its list with a cursor (a table lookup only for
+  the anchor's own orders).
+- The anchor skips the refresh while `Exchange.next_event_seq` has not moved since the
+  queue last matched the book; its own shadow reconcile keeps the queue in sync.
+- `Eligible.size` walks the book once instead of building, filtering and sorting a list of
+  every resting order, and returns at once when the best passive price is not at or
+  through the trade.
+- Marks, the reference mid (`Ref_book.mid_or_null`, best prices cached on update) and the
+  scaled price (`Scale.price_or_null`) are `or_null`, not options.
+
+`test/test_alloc.ml` pins minor words per `apply` with the exchange clock held still: 569
+for an unchanged BBO (the shadow reconcile through the engine) and 23 for a trade with no
+eligible fills, both independent of the number of resting orders (before: 579 / 80 with
+none, 1579 / 4080 with 500). The rest of an event's cost is the engine: placing and
+cancelling shadow orders and `Exchange.step`. `test_queue_ahead.ml` and
+`test_eligible.ml` check the new code against the old implementations, kept in `test/`,
+with quickcheck.
 
 ## Limitations and open questions
 
