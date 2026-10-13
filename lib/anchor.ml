@@ -57,7 +57,7 @@ type t =
   ; queue : Queue_ahead.t
   ; mutable has_l2 : bool
   ; mutable has_bbo : bool
-  ; mutable series_price : Price.t option
+  ; mutable series_price : Price.t or_null
   ; mutable stale : Stale_reason.t option
   ; mutable stale_since : int
   ; mutable stale_ns : int
@@ -65,10 +65,10 @@ type t =
   ; mutable gaps : int
   ; mutable last_event_at : int option
   ; mutable offset : int option
-  ; mutable funding_mark : Price.t option
-  ; mutable last_trade : Price.t option
-  ; mutable mark_set : Price.t option
-  ; mutable mark_set_at : int option
+  ; mutable funding_mark : Price.t or_null
+  ; mutable last_trade : Price.t or_null
+  ; mutable mark_set : Price.t or_null
+  ; mutable mark_set_at : int or_null
   ; mutable funding_rate_set : float option
   ; mutable events : int
   ; mutable ignored : int
@@ -164,7 +164,7 @@ let create
     ; queue = Queue_ahead.create ()
     ; has_l2 = false
     ; has_bbo = false
-    ; series_price = None
+    ; series_price = Null
     ; stale = Some Waiting_for_book
     ; stale_since = Exchange.now exchange
     ; stale_ns = 0
@@ -172,10 +172,10 @@ let create
     ; gaps = 0
     ; last_event_at = None
     ; offset = None
-    ; funding_mark = None
-    ; last_trade = None
-    ; mark_set = None
-    ; mark_set_at = None
+    ; funding_mark = Null
+    ; last_trade = Null
+    ; mark_set = Null
+    ; mark_set_at = Null
     ; funding_rate_set = None
     ; events = 0
     ; ignored = 0
@@ -220,7 +220,12 @@ let stats t =
 ;;
 
 let offset t = t.offset
-let last_set t = t.mark_set
+let option_of_null = function
+  | Null -> None
+  | This x -> Some x
+;;
+
+let last_set t = option_of_null t.mark_set
 let is_paused t = t.paused
 let is_stale t = Option.is_some t.stale
 let anchor_account t = t.anchor_account
@@ -277,19 +282,25 @@ let on_book_update t =
   cap_queue t
 ;;
 
-let raw_reference_price t =
-  match Option.first_some t.series_price t.funding_mark with
-  | Some _ as p -> p
-  | None ->
-    (match Ref_book.mid t.book with
-     | Some _ as p -> p
-     | None -> t.last_trade)
+let raw_reference_price t : Price.t or_null =
+  match t.series_price with
+  | This _ as p -> p
+  | Null ->
+    (match t.funding_mark with
+     | This _ as p -> p
+     | Null ->
+       (match Ref_book.mid_or_null t.book with
+        | This _ as p -> p
+        | Null -> t.last_trade))
 ;;
 
-let reference_price t =
-  Option.bind (raw_reference_price t) ~f:(fun px ->
-    Scale.price t.scale px ~direction:Nearest)
+let reference_price_or_null t : Price.t or_null =
+  match raw_reference_price t with
+  | Null -> Null
+  | This px -> Scale.price_or_null t.scale px ~direction:Nearest
 ;;
+
+let reference_price t = option_of_null (reference_price_or_null t)
 
 (* The target after the venue's clamp (LULD bands, daily limits), and whether the clamp
    moved it. *)
@@ -302,23 +313,27 @@ let clamp_target t px =
 ;;
 
 let set_mark t ~now =
-  match reference_price t with
-  | None -> ()
-  | Some px ->
+  match reference_price_or_null t with
+  | Null -> ()
+  | This px ->
     let px, was_clamped = clamp_target t px in
-    let changed = not ([%equal: Price.t option] (Some px) t.mark_set) in
+    let changed =
+      match t.mark_set with
+      | Null -> true
+      | This set -> not (Price.equal px set)
+    in
     let due =
       match t.mark_set_at with
-      | None -> true
-      | Some at -> now - at >= t.mark_interval_ns
+      | Null -> true
+      | This at -> now - at >= t.mark_interval_ns
     in
     if changed && due
     then (
       (match t.market_sim with
        | Some sim -> Market_sim.set_reference ?half_life:t.half_life sim t.sim_symbol px
        | None -> Exchange.set_mark t.exchange t.sim_symbol px);
-      t.mark_set <- Some px;
-      t.mark_set_at <- Some now;
+      t.mark_set <- This px;
+      t.mark_set_at <- This now;
       t.marks_set <- t.marks_set + 1;
       if was_clamped then t.clamped <- t.clamped + 1)
 ;;
@@ -338,8 +353,8 @@ let may_engage t =
        | Some sim, Some px when Price.( > ) px Price.zero ->
          Market_sim.set_reference sim t.sim_symbol px
        | _ -> ());
-      t.mark_set <- None;
-      t.mark_set_at <- None;
+      t.mark_set <- Null;
+      t.mark_set_at <- Null;
       t.log
         [%message
           "anchor: engaged"
@@ -432,7 +447,7 @@ let replay_trade t (trade : Market_data.Trade.t) =
 ;;
 
 let update_funding t (funding : Market_data.Funding.t) =
-  t.funding_mark <- Some funding.mark_price;
+  t.funding_mark <- This funding.mark_price;
   let rate = funding.rate *. t.funding_ratio in
   if not ([%equal: float option] (Some rate) t.funding_rate_set)
   then (
@@ -470,8 +485,8 @@ let go_fresh t ~now =
     t.stale_ns <- t.stale_ns + stale_for_ns;
     t.stale <- None;
     (* Pin the reference again at once, even at an unchanged price. *)
-    t.mark_set <- None;
-    t.mark_set_at <- None;
+    t.mark_set <- Null;
+    t.mark_set_at <- Null;
     t.log
       [%message
         "anchor: reference fresh"
@@ -488,7 +503,10 @@ let max_staleness_ns t =
   match t.max_staleness_ns with
   | Some _ as explicit -> explicit
   | None ->
-    let series_only = Option.is_some t.series_price && not (t.has_l2 || t.has_bbo) in
+    let series_only = (match t.series_price with
+       | This _ -> true
+       | Null -> false)
+      && not (t.has_l2 || t.has_bbo) in
     if series_only then None else Some default_max_staleness_ns
 ;;
 
@@ -563,7 +581,7 @@ let apply t (event : Market_data.Event.t) =
          go_fresh t ~now;
          on_book_update t)
      | Trade trade ->
-       t.last_trade <- Some trade.price;
+       t.last_trade <- This trade.price;
        if not (is_stale t) then replay_trade t trade
      | Funding funding -> update_funding t funding);
     if not (is_stale t) then update_mark t ~now)
@@ -574,7 +592,7 @@ let apply_price t ~recv_ts px =
   let event_time, now = advance_clock t recv_ts in
   check_silence t ~now:event_time;
   t.last_event_at <- Some event_time;
-  t.series_price <- Some px;
+  t.series_price <- This px;
   (* A series is the whole source unless a book arrives too. *)
   if not (t.has_l2 || t.has_bbo) then go_fresh t ~now;
   if not (is_stale t) then update_mark t ~now
@@ -584,7 +602,7 @@ let apply_price t ~recv_ts px =
 let follow_path t ~now =
   Option.iter t.path ~f:(fun path ->
     let elapsed = Time_ns.Span.of_int_ns (Int.max 0 (now - t.path_start)) in
-    t.series_price <- Some (Path.price_at path ~elapsed);
+    t.series_price <- This (Path.price_at path ~elapsed);
     t.last_event_at <- Some now;
     if not (t.has_l2 || t.has_bbo) then go_fresh t ~now)
 ;;
