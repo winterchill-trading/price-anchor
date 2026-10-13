@@ -69,8 +69,8 @@ let%expect_test "words per apply" =
     report "trade, no eligible fills" ~clients ~first:snapshot trade);
   [%expect {|
     ("unchanged BBO" (clients 0) (words 579))
-    ("trade, no eligible fills" (clients 0) (words 80))
+    ("trade, no eligible fills" (clients 0) (words 70))
     ("unchanged BBO" (clients 500) (words 1579))
-    ("trade, no eligible fills" (clients 500) (words 4080))
+    ("trade, no eligible fills" (clients 500) (words 4070))
     |}]
 ;;
