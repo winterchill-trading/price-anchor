@@ -18,8 +18,8 @@ let size book ~(passive : Side.t) ~p ~q ~exclude ~ahead =
   | Null -> Size.zero
   | This best when not (at_or_through ~passive ~p best) -> Size.zero
   | This _ ->
-    (* [iter] visits a level in time priority, which is the oldest-first order the
-       orders at [p] share [q] in. *)
+    (* [iter] visits a level in time priority, which is the oldest-first order the orders
+       at [p] share [q] in. *)
     let total = ref Size.zero in
     let used_at_p = ref Size.zero in
     Order_book.iter book ~f:(fun (o : Order_book.Resting_order.t) ->

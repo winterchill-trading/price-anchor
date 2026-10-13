@@ -55,7 +55,12 @@ let%expect_test "snapshot, delta, bbo" =
 
 let%test_unit "mid_or_null is the mid of the best levels after any sequence of updates" =
   let level = [%quickcheck.generator: int * int] in
-  let update = [%quickcheck.generator: bool * [%custom List.gen_with_length 3 level] * [%custom List.gen_with_length 3 level]] in
+  let update =
+    [%quickcheck.generator:
+      bool
+      * [%custom List.gen_with_length 3 level]
+      * [%custom List.gen_with_length 3 level]]
+  in
   Quickcheck.test
     (List.quickcheck_generator update)
     ~sexp_of:[%sexp_of: (bool * (int * int) list * (int * int) list) list]

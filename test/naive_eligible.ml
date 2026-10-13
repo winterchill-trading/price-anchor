@@ -11,7 +11,9 @@ let size book ~passive ~p ~q ~exclude ~ahead =
   let orders =
     Order_book.orders book
     |> List.filter ~f:(fun (o : Order_book.Resting_order.t) ->
-      Side.equal o.side passive && (not (exclude o.owner)) && at_or_through ~passive ~p o.px)
+      Side.equal o.side passive
+      && (not (exclude o.owner))
+      && at_or_through ~passive ~p o.px)
     |> List.sort ~compare:(fun (a : Order_book.Resting_order.t) b ->
       Comparable.lexicographic
         [ (fun (a : Order_book.Resting_order.t) b -> Int.compare a.timestamp b.timestamp)

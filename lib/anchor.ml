@@ -225,6 +225,7 @@ let stats t =
 ;;
 
 let offset t = t.offset
+
 let option_of_null = function
   | Null -> None
   | This x -> Some x
@@ -497,10 +498,12 @@ let max_staleness_ns t =
   match t.max_staleness_ns with
   | Some _ as explicit -> explicit
   | None ->
-    let series_only = (match t.series_price with
+    let series_only =
+      (match t.series_price with
        | This _ -> true
        | Null -> false)
-      && not (t.has_l2 || t.has_bbo) in
+      && not (t.has_l2 || t.has_bbo)
+    in
     if series_only then None else Some default_max_staleness_ns
 ;;
 

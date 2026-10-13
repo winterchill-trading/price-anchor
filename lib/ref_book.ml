@@ -66,7 +66,8 @@ let best t (side : Side.t) =
 
 let mid_or_null t : Price.t or_null =
   match t.best_bid, t.best_ask with
-  | This bid, This ask -> This (Price.of_units ((Price.to_units bid + Price.to_units ask) / 2))
+  | This bid, This ask ->
+    This (Price.of_units ((Price.to_units bid + Price.to_units ask) / 2))
   | Null, _ | _, Null -> Null
 ;;
 

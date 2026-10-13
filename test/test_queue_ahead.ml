@@ -21,17 +21,28 @@ module Op = struct
   [@@deriving sexp_of, quickcheck]
 end
 
-let owners = [| Account.of_string "anchor"; Account.of_string "a"; Account.of_string "b" |]
+let owners =
+  [| Account.of_string "anchor"; Account.of_string "a"; Account.of_string "b" |]
+;;
 
 (* Small grids so ops hit the same prices often. Bids rest at 1..5 and asks at 6..10, so
    no order crosses. *)
 let price ~buy px = Price.of_int (if buy then 1 + (abs px % 5) else 6 + (abs px % 5))
 let size n = Size.of_int (1 + (abs n % 4))
-let shown side px = Size.of_int (((Price.to_units px / Price.units_per_one) + if Side.equal side Buy then 1 else 2) % 4)
+
+let shown side px =
+  Size.of_int
+    (((Price.to_units px / Price.units_per_one) + if Side.equal side Buy then 1 else 2)
+     % 4)
+;;
 
 (* Reference sizes depend on the price and the op's seed; some prices are not covered. *)
 let reference seed side px =
-  let k = ((Price.to_units px / Price.units_per_one) * 7) + seed + if Side.equal side Buy then 0 else 3 in
+  let k =
+    (Price.to_units px / Price.units_per_one * 7)
+    + seed
+    + if Side.equal side Buy then 0 else 3
+  in
   if k % 5 = 0 then None else Some (Size.of_int (abs k % 3))
 ;;
 
@@ -53,7 +64,9 @@ let%test_unit "indexed queue_ahead matches the full walk" =
             (Queue_ahead.find fast oid)
             ~expect:(Naive_queue_ahead.find naive oid)
         done;
-        [%test_result: int] (Queue_ahead.length fast) ~expect:(Naive_queue_ahead.length naive)
+        [%test_result: int]
+          (Queue_ahead.length fast)
+          ~expect:(Naive_queue_ahead.length naive)
       in
       List.iter ops ~f:(fun (op : Op.t) ->
         (match op with

@@ -39,7 +39,10 @@ let run ~events ~clients ~churn =
   let resting = Queue.create () in
   let place side p =
     match
-      Exchange.place exchange client (Order_request.limit btc side ~px:(px p) ~size:(sz "0.01"))
+      Exchange.place
+        exchange
+        client
+        (Order_request.limit btc side ~px:(px p) ~size:(sz "0.01"))
     with
     | Resting { order_id; _ } -> Queue.enqueue resting (order_id, side, p)
     | _ -> ()

@@ -67,7 +67,8 @@ let%expect_test "words per apply" =
   List.iter [ 0; 500 ] ~f:(fun clients ->
     report "unchanged BBO" ~clients ~first:bbo bbo;
     report "trade, no eligible fills" ~clients ~first:snapshot trade);
-  [%expect {|
+  [%expect
+    {|
     ("unchanged BBO" (clients 0) (words 569))
     ("trade, no eligible fills" (clients 0) (words 23))
     ("unchanged BBO" (clients 500) (words 569))

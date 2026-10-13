@@ -195,7 +195,8 @@ let cap t ~reference =
       match reference side level.level_px with
       | None -> ()
       | Some size ->
-        iter_level level.head ~f:(fun e -> if Size.( < ) size e.ahead then e.ahead <- size))
+        iter_level level.head ~f:(fun e ->
+          if Size.( < ) size e.ahead then e.ahead <- size))
   in
   cap_side Buy;
   cap_side Sell
@@ -205,7 +206,8 @@ let trade t ~passive ~px ~size =
   match Hashtbl.find (levels t passive) (Price.to_units px) with
   | None -> ()
   | Some level ->
-    iter_level level.head ~f:(fun e -> e.ahead <- Size.( - ) e.ahead (Size.min e.ahead size))
+    iter_level level.head ~f:(fun e ->
+      e.ahead <- Size.( - ) e.ahead (Size.min e.ahead size))
 ;;
 
 let find t oid = Hashtbl.find t.entries (key_of oid) |> Option.map ~f:(fun e -> e.ahead)
