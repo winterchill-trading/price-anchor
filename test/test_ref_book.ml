@@ -52,3 +52,41 @@ let%expect_test "snapshot, delta, bbo" =
   show book;
   [%expect {| ((bids ((99 3))) (asks ()) (mid ())) |}]
 ;;
+
+let%test_unit "mid_or_null is the mid of the best levels after any sequence of updates" =
+  let level = [%quickcheck.generator: int * int] in
+  let update = [%quickcheck.generator: bool * [%custom List.gen_with_length 3 level] * [%custom List.gen_with_length 3 level]] in
+  Quickcheck.test
+    (List.quickcheck_generator update)
+    ~sexp_of:[%sexp_of: (bool * (int * int) list * (int * int) list) list]
+    ~f:(fun updates ->
+      let book = Ref_book.create () in
+      let levels l =
+        List.map l ~f:(fun (px, size) ->
+          { Market_data.L2_update.Level.price = Price.of_int (1 + (abs px % 20))
+          ; size = Size.of_int (abs size % 3)
+          })
+      in
+      List.iter updates ~f:(fun (snapshot, bids, asks) ->
+        Ref_book.apply_l2
+          book
+          { instrument = Helpers.instrument
+          ; exch_ts = Helpers.epoch
+          ; recv_ts = Helpers.epoch
+          ; kind = (if snapshot then Snapshot else Delta)
+          ; bids = levels bids
+          ; asks = levels asks
+          };
+        let expect =
+          match Ref_book.best book Buy, Ref_book.best book Sell with
+          | Some (bid, _), Some (ask, _) ->
+            Some (Price.of_units ((Price.to_units bid + Price.to_units ask) / 2))
+          | _ -> None
+        in
+        let or_null =
+          match Ref_book.mid_or_null book with
+          | Null -> None
+          | This px -> Some px
+        in
+        [%test_result: Price.t option] or_null ~expect))
+;;
