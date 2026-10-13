@@ -16,7 +16,8 @@ Design: [specs/design/price-anchor.md](https://github.com/winterchill-trading/sp
 | `Path` | a reference price as a function of venue time (a series step function or a drifting fixed price), pulled by `Anchor.step` |
 | `Clamp` | `within_bands`: keep a target inside LULD bands or daily limits |
 | `Shadow` | the top-N reference levels as post-only orders of the anchor account, reconciled keep / cancel / place, with consumed size |
-| `Queue_ahead` | reference size ahead of each simulated resting order |
+| `Queue_ahead` | reference size ahead of each simulated resting order, indexed by price |
+| `Eligible` | the simulated size a reference trade reaches (trade replay) |
 | `Ref_book` | the reference book from L2 snapshots and deltas (or BBO) |
 | `Scale` | price and size factors, rounding to the simulated tick (bids down, asks up) and lot |
 
