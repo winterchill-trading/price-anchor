@@ -49,7 +49,7 @@ let digits n =
   go n 0
 ;;
 
-let price t px ~direction =
+let price_or_null t px ~direction : Price.t or_null =
   let tick = Price.to_units t.instrument.price_tick in
   let units = scale_units (Price.to_units px) ~factor:t.price_factor in
   let rounded = round_to units ~step:tick ~direction in
@@ -69,7 +69,13 @@ let price t px ~direction =
         let step = Int.max step tick in
         round_to units ~step ~direction)
   in
-  if rounded <= 0 then None else Some (Price.of_units rounded)
+  if rounded <= 0 then Null else This (Price.of_units rounded)
+;;
+
+let price t px ~direction =
+  match price_or_null t px ~direction with
+  | Null -> None
+  | This px -> Some px
 ;;
 
 let size t sz =

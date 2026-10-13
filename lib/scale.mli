@@ -32,5 +32,8 @@ end
     to zero or below. *)
 val price : t -> Price.t -> direction:Direction.t -> Price.t option
 
+(** [price] without allocating: [Null] where it returns [None]. *)
+val price_or_null : t -> Price.t -> direction:Direction.t -> Price.t or_null
+
 (** The scaled size rounded down to the instrument's lot; may be zero. *)
 val size : t -> Size.t -> Size.t
