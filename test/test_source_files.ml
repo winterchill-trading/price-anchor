@@ -124,10 +124,10 @@ let%expect_test "raw minute files through a normalizer, with a disconnect" =
       2025-10-09T08:53:20.100000000Z Disconnect
       2025-10-09T08:53:20.200000000Z Trades
       2025-10-09T08:53:22.000000000Z L2
-      2025-10-09T08:53:22.100000000Z Trades
       (on_error
        (((stream L2) (recv_ts "2025-10-09 08:53:22.5Z"))
         ("toy: bad frame" garbage)))
+      2025-10-09T08:53:22.100000000Z Trades
       ((stale ()) (went_stale 2) (stale_ns 1900000000) (gaps 1) (events 4)
        (ignored 0) (marks_set 2) (funding_rates_set 0)
        (shadow ((placed 4) (cancelled 2) (skipped 0) (consumed 0))) (replays 0)
