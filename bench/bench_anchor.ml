@@ -45,6 +45,7 @@ let run ~events ~clients =
        : Order_status.t)
   done;
   let start = Time_ns.now () in
+  let words_before = Gc.minor_words () in
   for i = 1 to events do
     let e : Market_data.Event.t =
       if i % 4 = 0
@@ -71,6 +72,7 @@ let run ~events ~clients =
     Anchor.apply anchor e;
     ignore (Exchange.drain_events exchange : Event.t list)
   done;
+  let words_per_event = (Gc.minor_words () - words_before) / events in
   let elapsed = Time_ns.diff (Time_ns.now ()) start in
   let per_event = Time_ns.Span.(elapsed / Float.of_int events) in
   print_s
@@ -80,6 +82,7 @@ let run ~events ~clients =
         (clients : int)
         (elapsed : Time_ns.Span.t)
         (per_event : Time_ns.Span.t)
+        (words_per_event : int)
         ~stats:(Anchor.stats anchor : Anchor.Stats.t)]
 ;;
 
