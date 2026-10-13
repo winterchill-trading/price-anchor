@@ -55,6 +55,10 @@ type t =
   ; book : Ref_book.t
   ; shadow : Shadow.t
   ; queue : Queue_ahead.t
+  ; mutable queue_synced : int
+  (** [Exchange.next_event_seq] when [queue] last matched the simulated orders; while it
+      is unchanged, no order was placed, cancelled or filled, so a refresh would find
+      nothing *)
   ; mutable has_l2 : bool
   ; mutable has_bbo : bool
   ; mutable series_price : Price.t or_null
@@ -162,6 +166,7 @@ let create
     ; shadow =
         Shadow.create exchange ~account:anchor_account ~symbol:sim_symbol ~scale ~levels
     ; queue = Queue_ahead.create ()
+    ; queue_synced = -1
     ; has_l2 = false
     ; has_bbo = false
     ; series_price = Null
@@ -239,8 +244,23 @@ let is_anchor t account =
 ;;
 
 let refresh_queue t =
-  Option.iter (Exchange.book t.exchange t.sim_symbol) ~f:(fun book ->
-    Queue_ahead.refresh t.queue book ~exclude:(is_anchor t) ~shown:(Shadow.shown t.shadow))
+  if Exchange.next_event_seq t.exchange <> t.queue_synced
+  then (
+    Option.iter (Exchange.book t.exchange t.sim_symbol) ~f:(fun book ->
+      Queue_ahead.refresh
+        t.queue
+        book
+        ~exclude:(is_anchor t)
+        ~shown:(Shadow.shown t.shadow));
+    t.queue_synced <- Exchange.next_event_seq t.exchange)
+;;
+
+(* Runs [f], which only changes the anchor's own post-only orders: if the queue matched
+   the simulated orders before, it still does after. *)
+let own_orders_only t ~f =
+  let synced = Exchange.next_event_seq t.exchange = t.queue_synced in
+  f ();
+  if synced then t.queue_synced <- Exchange.next_event_seq t.exchange
 ;;
 
 (* Caps queues at prices the shadow levels cover by the reference size there. *)
@@ -277,7 +297,7 @@ let cap_queue t =
 ;;
 
 let on_book_update t =
-  Shadow.reconcile t.shadow t.book;
+  own_orders_only t ~f:(fun () -> Shadow.reconcile t.shadow t.book);
   refresh_queue t;
   cap_queue t
 ;;
