@@ -83,15 +83,14 @@ let refresh t book ~exclude ~shown =
   let generation = t.generation in
   let removed = ref (Hashtbl.length t.entries) in
   Order_book.iter book ~f:(fun (o : Order_book.Resting_order.t) ->
-    if not (exclude o.owner)
+    (* Tracked orders are never excluded, so only an untracked one pays for [exclude]. *)
+    let key = Order_id.to_int_exn o.oid in
+    if Hashtbl.mem t.entries key
     then (
-      let key = Order_id.to_int_exn o.oid in
-      if Hashtbl.mem t.entries key
-      then (
-        (Hashtbl.find_exn t.entries key).seen <- generation;
-        decr removed)
-      else
-        add t ~oid:o.oid ~side:o.side ~px:o.px ~ahead:(shown o.side o.px) ~seen:generation))
+      (Hashtbl.find_exn t.entries key).seen <- generation;
+      decr removed)
+    else if not (exclude o.owner)
+    then add t ~oid:o.oid ~side:o.side ~px:o.px ~ahead:(shown o.side o.px) ~seen:generation)
   [@nontail];
   if !removed > 0
   then (
