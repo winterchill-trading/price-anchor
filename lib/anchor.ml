@@ -383,42 +383,16 @@ let at_or_through ~(passive : Side.t) ~p px =
   | Sell -> Price.( <= ) px p
 ;;
 
-(* The size of simulated resting orders a reference trade of [q] at [p] reaches: orders
-   strictly through [p] in full, orders at [p], oldest first, for what is left of [q]
-   after their queue_ahead and the orders at [p] before them. *)
+(* The size of simulated resting orders a reference trade of [q] at [p] reaches; see
+   [Eligible.size]. An order not tracked yet is behind what the anchor shows at [p]. *)
 let eligible_size t ~passive ~p ~q =
   match Exchange.book t.exchange t.sim_symbol with
   | None -> Size.zero
   | Some book ->
-    let orders =
-      Order_book.orders book
-      |> List.filter ~f:(fun (o : Order_book.Resting_order.t) ->
-        Side.equal o.side passive
-        && (not (is_anchor t o.owner))
-        && at_or_through ~passive ~p o.px)
-      |> List.sort ~compare:(fun (a : Order_book.Resting_order.t) b ->
-        Comparable.lexicographic
-          [ (fun (a : Order_book.Resting_order.t) b ->
-              Int.compare a.timestamp b.timestamp)
-          ; (fun a b -> Order_id.compare a.oid b.oid)
-          ]
-          a
-          b)
-    in
-    let used_at_p = ref Size.zero in
-    List.fold orders ~init:Size.zero ~f:(fun acc (o : Order_book.Resting_order.t) ->
-      if not (Price.equal o.px p)
-      then Size.( + ) acc o.remaining
-      else (
-        let ahead =
-          match Queue_ahead.find t.queue o.oid with
-          | Some ahead -> ahead
-          | None -> Shadow.shown t.shadow passive p
-        in
-        let left = Size.( - ) (Size.( - ) q ahead) !used_at_p in
-        let e = Size.min o.remaining (Size.max Size.zero left) in
-        used_at_p := Size.( + ) !used_at_p e;
-        Size.( + ) acc e))
+    Eligible.size book ~passive ~p ~q ~exclude:(is_anchor t) ~ahead:(fun o ->
+      match Queue_ahead.find t.queue o.oid with
+      | Some ahead -> ahead
+      | None -> Shadow.shown t.shadow passive p)
 ;;
 
 (* Trade replay: passive simulated orders fill when the reference trades at or through
