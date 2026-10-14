@@ -33,11 +33,11 @@ val of_feed : Market_data.Feed.t -> t
 val of_feed_with_gaps : Market_data.Feed.With_gaps.t -> t
 
 (** The raw minute files of [symbol] on [normalizer]'s venue under [dir] (the recorder's
-    data directory, containing [raw/]) with [recv_ts] in [[from, to_)], all streams merged
-    by [recv_ts] ({!Market_data.Raw_reader.read}) and normalized with one state per
-    stream. An empty raw line resets that stream's state and becomes a
-    {!Market_data.Gap.Reason.Disconnect} gap. Frames the normalizer rejects go to
-    [on_error] (default: logged) and are skipped. *)
+    data directory, containing [raw/]) with [recv_ts] in the half-open interval from
+    [from] (inclusive) to [to_] (exclusive), all streams merged by [recv_ts]
+    ({!Market_data.Raw_reader.read}) and normalized with one state per stream. An empty
+    raw line resets that stream's state and becomes a {!Market_data.Gap.Reason.Disconnect}
+    gap. Frames the normalizer rejects go to [on_error] (default: logged) and are skipped. *)
 val of_raw
   :  ?on_error:(Error.t -> unit)
   -> dir:string
